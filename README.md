@@ -1,6 +1,6 @@
 # Ago Báo giá — Backend (NestJS + Express)
 
-Backend tách ra từ các API route của app Next.js (`../baogia_whatapps/src/app/api`). **Logic nghiệp vụ giữ nguyên**: thư mục `src/core` là bản copy nguyên văn của `src/server` (service, lib, validation, Prisma); `src/modules/*` chỉ là lớp HTTP mỏng port 1:1 từng route.
+Backend tách ra từ các API route của app Next.js (`../baogia_whatapps/src/app/api`). **Logic nghiệp vụ giữ nguyên**: logic và từng câu truy vấn Prisma được chuyển nguyên văn từ `src/server` sang service/repository của từng module (`src/modules/*`); `src/core` giữ hàm thuần, kết nối Prisma và zod schema.
 
 ## Công nghệ
 NestJS 12 (nền **Express**), TypeScript strict, Prisma 7 (adapter-pg) + PostgreSQL (Supabase), zod 4, WhatsApp Cloud API, Zalo OA, Telegram.
@@ -8,16 +8,20 @@ NestJS 12 (nền **Express**), TypeScript strict, Prisma 7 (adapter-pg) + Postgr
 ## Cấu trúc
 ```
 src/
-  main.ts            bootstrap: rawBody, json 50mb, raw image/*, helmet, CORS, prefix /api
+  main.ts            bootstrap: rawBody, json 50mb, raw image/*, webhook raw, helmet, CORS, prefix /api
   app.module.ts
-  common/            handle() (≙ handle của Next), AllExceptionsFilter, webReq() (Express -> shape cũ)
-  core/              LOGIC GỐC (không sửa khi port): services/ lib/ validation/ db/ http/
+  common/            handle() (≙ handle của Next), AllExceptionsFilter, webReq(), audit/ (AuditService, global)
+  core/              db/prisma.ts, lib/ (hàm thuần: whatsapp, telegram, placeholders...), validation/ (zod schema)
   shared/            countries.ts, activityLabels.ts (dùng chung với FE)
-  modules/<nhóm>/    <nhóm>.controller.ts + <nhóm>.module.ts  (1 nhóm = 1 thư mục route của Next)
+  modules/<nhóm>/    <nhóm>.module.ts
+                     <nhóm>.controller.ts   HTTP mỏng: decorator, @Req/@Body, handle(() => service..., status)
+                     <nhóm>.service.ts      logic + điều phối (parse zod, snapshot, audit)
+                     <nhóm>.repository.ts   NƠI DUY NHẤT gọi Prisma
   modules/worker/    worker gửi nền (≙ src/instrumentation.ts)
 prisma/              schema.prisma, schema.sql, seed.ts
-docs/                tài liệu (xem docs/00..06)
+docs/                tài liệu (xem docs/01, docs/06)
 ```
+Module: activity, auth, channels, cron, customers, dashboard, health, inbound (+auto-reply), notification, quotations, receive-channels, send (+quota, send-job), templates (+meta-sync), users, webhooks, worker, zalo (+token, link, sender, client).
 
 ## Chạy
 ```bash

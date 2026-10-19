@@ -16,8 +16,8 @@ export const TIER_LIMITS: Record<string, number> = {
 };
 
 export function tierToLimit(tier: string | null | undefined): number {
-  const t = (tier || "").toUpperCase();
-  if (t === "TIER_UNLIMITED") return Infinity;
+  const t = (tier || '').toUpperCase();
+  if (t === 'TIER_UNLIMITED') return Infinity;
   return TIER_LIMITS[t] ?? DEFAULT_LIMIT;
 }
 
@@ -28,7 +28,7 @@ export function tierToLimit(tier: string | null | undefined): number {
 // (hạn mức đã chuyển lên cấp business portfolio từ 07/10/2025). Nếu coi đó là 2.000 chắc chắn
 // thì màn Tổng quan hiện một con số bịa mà không ai biết là bịa.
 export function resolveLimit(tier: string | null | undefined): { limit: number; unknown: boolean } {
-  const t = (tier || "").trim().toUpperCase();
+  const t = (tier || '').trim().toUpperCase();
   if (!t) return { limit: DEFAULT_LIMIT, unknown: true };
   if (!(t in TIER_LIMITS)) return { limit: DEFAULT_LIMIT, unknown: true }; // tier lạ -> cũng là không biết
   return { limit: tierToLimit(t), unknown: false };

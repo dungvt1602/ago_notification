@@ -1,8 +1,8 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 export const createUserSchema = z.object({
-  username: z.string().min(1, "Thiếu username"),
-  email: z.string().min(1, "Thiếu email"),
+  username: z.string().min(1, 'Thiếu username'),
+  email: z.string().min(1, 'Thiếu email'),
   fullName: z.string().nullish(),
   password: z.string().optional(), // mật khẩu THẬT (sẽ băm bcrypt); trống = chưa đặt
   isActive: z.boolean().optional(),

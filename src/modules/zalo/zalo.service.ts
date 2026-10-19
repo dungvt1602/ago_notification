@@ -1,18 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { prisma } from '@core/db/prisma';
 import { listSharedZaloBindings } from '@core/lib/zaloSharedToken';
 import { publicBaseUrl, type BaseUrlReq } from '@core/http/baseUrl';
-import { sendZaloTo } from '@core/lib/zalo';
-import { actorFromRequest, audit } from '@core/services/auditService';
-import {
-  checkZaloConnection,
-  disconnectZalo,
-  exchangeZaloCode,
-  forceRefreshZaloToken,
-  startZaloOAuth,
-  zaloStatus,
-} from '@core/services/zaloTokenService';
-import { listZaloSenders } from '@core/services/zaloSenderService';
+import { AuditService } from '@common/audit/audit.service';
+import { actorFromRequest } from '@common/audit/audit.helpers';
+import { ZaloClient } from './zalo.client';
+import { ZaloRepository } from './zalo.repository';
+import { ZaloSenderService } from './zalo-sender.service';
+import { ZaloTokenService } from './zalo-token.service';
 
 // Đường TAY: dán nguyên link (hoặc chỉ code) -> bóc code/oa_id/state.
 function parseInput(raw: string): { code: string; oaId: string; state: string } {
@@ -34,23 +28,26 @@ function parseInput(raw: string): { code: string; oaId: string; state: string } 
 
 @Injectable()
 export class ZaloService {
+  constructor(
+    private readonly repo: ZaloRepository,
+    private readonly token: ZaloTokenService,
+    private readonly client: ZaloClient,
+    private readonly senderSvc: ZaloSenderService,
+    private readonly auditSvc: AuditService,
+  ) {}
+
   // Người đã liên kết Zalo bên worker Go (chế độ dùng chung token), kèm cờ receiveChannel.
   async listSharedUsers() {
     const rows = await listSharedZaloBindings();
     const uids = rows.map((r) => r.zaloUserId).filter(Boolean);
-    const channels = uids.length
-      ? await prisma.receiveChannel.findMany({
-          where: { type: 'ZALO', accountId: { in: uids } },
-          select: { accountId: true, name: true, isActive: true },
-        })
-      : [];
+    const channels = uids.length ? await this.repo.findChannelsByAccountIds(uids) : [];
     const byId = new Map(channels.map((c) => [c.accountId, { name: c.name, isActive: c.isActive }]));
     return rows.map((r) => ({ ...r, receiveChannel: byId.get(r.zaloUserId) ?? null }));
   }
 
   async status(req: BaseUrlReq) {
     const base = publicBaseUrl(req);
-    const st = await zaloStatus();
+    const st = await this.token.zaloStatus();
     return {
       ...st,
       callbackUrl: (process.env.ZALO_OAUTH_CALLBACK_URL || '').trim() || `${base}/api/zalo/oauth/callback`,
@@ -60,8 +57,8 @@ export class ZaloService {
   }
 
   async check(req: BaseUrlReq) {
-    const r = await checkZaloConnection();
-    await audit(req, {
+    const r = await this.token.checkZaloConnection();
+    await this.auditSvc.audit(req, {
       action: 'ZALO_KIEM_TRA',
       target: r.oaName || r.oaId || 'OA',
       result: r.ok ? 'SUCCESS' : 'FAILED',
@@ -72,12 +69,12 @@ export class ZaloService {
   }
 
   async disconnect(req: BaseUrlReq) {
-    await disconnectZalo(actorFromRequest(req));
+    await this.token.disconnectZalo(actorFromRequest(req));
     return { ok: true };
   }
 
   async refresh(req: BaseUrlReq) {
-    const r = await forceRefreshZaloToken(actorFromRequest(req));
+    const r = await this.token.forceRefreshZaloToken(actorFromRequest(req));
     return { oaId: r.oaId, expiresAt: r.expiresAt, updatedAt: r.updatedAt };
   }
 
@@ -85,12 +82,12 @@ export class ZaloService {
     const body = (rawBody ?? {}) as { userId?: string; text?: string };
     const userId = (body.userId || '').trim();
     if (!userId) throw new Error('Nhập user_id / SĐT người nhận.');
-    const r = await sendZaloTo(
+    const r = await this.client.sendZaloTo(
       userId,
       (body.text || '').trim() || '✅ AGO báo giá: kết nối Zalo OA thành công.',
     );
     if (r.skipped) throw new Error('Chưa có token Zalo OA — hãy kết nối Zalo OA trước.');
-    await audit(req, {
+    await this.auditSvc.audit(req, {
       action: 'ZALO_GUI_THU',
       target: userId,
       result: r.ok ? 'SUCCESS' : 'FAILED',
@@ -106,13 +103,13 @@ export class ZaloService {
       (body.callbackUrl || '').trim() ||
       (process.env.ZALO_OAUTH_CALLBACK_URL || '').trim() ||
       `${publicBaseUrl(req)}/api/zalo/oauth/callback`;
-    return startZaloOAuth(callbackUrl);
+    return this.token.startZaloOAuth(callbackUrl);
   }
 
   async oauthExchange(rawBody: unknown) {
     const body = (rawBody ?? {}) as { code?: string; url?: string; oaId?: string; state?: string };
     const parsed = parseInput(body.url || body.code || '');
-    return exchangeZaloCode({
+    return this.token.exchangeZaloCode({
       code: parsed.code,
       oaId: (body.oaId || '').trim() || parsed.oaId || null,
       state: (body.state || '').trim() || parsed.state || null,
@@ -136,7 +133,7 @@ export class ZaloService {
       return { kind: 'redirect', url: back.toString() };
     }
     try {
-      const r = await exchangeZaloCode({ code, oaId, state });
+      const r = await this.token.exchangeZaloCode({ code, oaId, state });
       back.searchParams.set('zalo', 'ok');
       back.searchParams.set('oa', r.oaId);
     } catch (err) {
@@ -147,6 +144,6 @@ export class ZaloService {
   }
 
   senders() {
-    return listZaloSenders();
+    return this.senderSvc.listZaloSenders();
   }
 }

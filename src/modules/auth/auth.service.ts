@@ -1,12 +1,15 @@
 import { HttpException, Injectable } from '@nestjs/common';
 import type { ReqLike } from '@core/http/reqLike';
 import { verifyPassword, isRealHash } from '@core/lib/password';
-import { audit } from '@core/services/auditService';
+import { AuditService } from '@common/audit/audit.service';
 import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly auditService: AuditService,
+  ) {}
 
   async login(raw: unknown, req: ReqLike) {
     const body = (raw ?? {}) as { identifier?: unknown; password?: unknown };
@@ -16,7 +19,7 @@ export class AuthService {
     if (!password) throw new HttpException({ error: 'Vui lòng nhập mật khẩu.' }, 400);
 
     const fail = async (reason: string, status = 401): Promise<never> => {
-      await audit(req, {
+      await this.auditService.audit(req, {
         action: 'DANG_NHAP_LOI',
         target: identifier,
         note: reason,
@@ -37,7 +40,7 @@ export class AuthService {
 
     const isAdmin = u.userRoles.some((r) => r.role.code === 'ADMIN');
     const name = u.fullName || u.username;
-    await audit(req, {
+    await this.auditService.audit(req, {
       action: 'DANG_NHAP',
       target: u.username,
       note: isAdmin ? 'quản trị viên' : 'nhân viên',

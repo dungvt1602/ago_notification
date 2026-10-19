@@ -6,12 +6,16 @@ import {
   type CreateReceiveChannelInput,
   type UpdateReceiveChannelInput,
 } from '@core/validation/receiveChannel.schema';
-import { audit, snapshot, labelOf, diffSummary } from '@core/services/auditService';
+import { AuditService } from '@common/audit/audit.service';
+import { labelOf, diffSummary } from '@common/audit/audit.helpers';
 import { ReceiveChannelsRepository } from './receive-channels.repository';
 
 @Injectable()
 export class ReceiveChannelsService {
-  constructor(private readonly repo: ReceiveChannelsRepository) {}
+  constructor(
+    private readonly repo: ReceiveChannelsRepository,
+    private readonly auditService: AuditService,
+  ) {}
 
   listReceiveChannels() {
     return this.repo.findAll();
@@ -48,7 +52,7 @@ export class ReceiveChannelsService {
   async create(body: unknown, req: ReqLike) {
     const input = createReceiveChannelSchema.parse(body);
     const c = await this.createReceiveChannel(input);
-    await audit(req, {
+    await this.auditService.audit(req, {
       action: 'KENH_NHAN_TAO',
       target: labelOf('receiveChannel', c as unknown as Record<string, unknown>),
       note: `nhận: ${input.accountId}${input.note ? ' — ' + input.note : ''}`,
@@ -58,9 +62,9 @@ export class ReceiveChannelsService {
 
   async update(id: string, body: unknown, req: ReqLike) {
     const input = updateReceiveChannelSchema.parse(body);
-    const before = await snapshot('receiveChannel', id);
+    const before = await this.auditService.snapshot('receiveChannel', id);
     const r = await this.updateReceiveChannel(id, input);
-    await audit(req, {
+    await this.auditService.audit(req, {
       action: 'KENH_NHAN_SUA',
       target: labelOf('receiveChannel', before, id),
       note: diffSummary(before, input as Record<string, unknown>) || 'không đổi gì',
@@ -69,9 +73,9 @@ export class ReceiveChannelsService {
   }
 
   async remove(id: string, req: ReqLike) {
-    const before = await snapshot('receiveChannel', id);
+    const before = await this.auditService.snapshot('receiveChannel', id);
     const r = await this.deleteReceiveChannel(id);
-    await audit(req, {
+    await this.auditService.audit(req, {
       action: 'KENH_NHAN_XOA',
       target: labelOf('receiveChannel', before, id),
       note: before ? `nhận: ${before.accountId}` : null,

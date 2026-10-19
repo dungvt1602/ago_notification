@@ -9,6 +9,6 @@ export class InboundController {
 
   @Get()
   get() {
-    return handle(() => this.service.list(), 500);
+    return handle(() => this.service.listInbound(), 500);
   }
 }

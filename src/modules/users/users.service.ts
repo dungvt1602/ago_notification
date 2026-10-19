@@ -7,13 +7,18 @@ import {
   type CreateUserInput,
   type UpdateUserInput,
 } from '@core/validation/user.schema';
-import { audit, snapshot, labelOf, diffSummary } from '@core/services/auditService';
-import { createZaloLinkCode, getZaloLinkStatus, unlinkZalo } from '@core/services/zaloLinkService';
+import { AuditService } from '@common/audit/audit.service';
+import { labelOf, diffSummary } from '@common/audit/audit.helpers';
+import { ZaloLinkService } from '../zalo/zalo-link.service';
 import { UsersRepository } from './users.repository';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly repo: UsersRepository) {}
+  constructor(
+    private readonly repo: UsersRepository,
+    private readonly auditService: AuditService,
+    private readonly zaloLink: ZaloLinkService,
+  ) {}
 
   listUsers() {
     return this.repo.findAll();
@@ -48,7 +53,7 @@ export class UsersService {
     const input = createUserSchema.parse(body);
     const u = await this.createUser(input);
     // Tự đăng ký (chưa đăng nhập) thì actor trống -> ghi chính người vừa tạo.
-    await audit(req, {
+    await this.auditService.audit(req, {
       action: 'NGUOI_DUNG_TAO',
       target: labelOf('user', u as unknown as Record<string, unknown>),
       note: `email ${input.email}${input.password ? '' : ' (chưa đặt mật khẩu)'}`,
@@ -57,8 +62,8 @@ export class UsersService {
   }
 
   async zaloLinkCode(id: string, req: ReqLike) {
-    const r = await createZaloLinkCode(id);
-    await audit(req, {
+    const r = await this.zaloLink.createZaloLinkCode(id);
+    await this.auditService.audit(req, {
       action: 'ZALO_LAY_MA',
       target: r.userName,
       note: 'mã hiệu lực 10 phút (không ghi mã)',
@@ -67,18 +72,18 @@ export class UsersService {
   }
 
   zaloStatus(id: string) {
-    return getZaloLinkStatus(id);
+    return this.zaloLink.getZaloLinkStatus(id);
   }
 
   zaloUnlink(id: string) {
-    return unlinkZalo(id);
+    return this.zaloLink.unlinkZalo(id);
   }
 
   async update(id: string, body: unknown, req: ReqLike) {
     const input = updateUserSchema.parse(body);
-    const before = await snapshot('user', id);
+    const before = await this.auditService.snapshot('user', id);
     const r = await this.updateUser(id, input);
-    await audit(req, {
+    await this.auditService.audit(req, {
       action: 'NGUOI_DUNG_SUA',
       target: labelOf('user', before, id),
       note: diffSummary(before, input as Record<string, unknown>) || 'không đổi gì',
@@ -87,9 +92,9 @@ export class UsersService {
   }
 
   async remove(id: string, req: ReqLike) {
-    const before = await snapshot('user', id);
+    const before = await this.auditService.snapshot('user', id);
     const r = await this.deleteUser(id);
-    await audit(req, { action: 'NGUOI_DUNG_XOA', target: labelOf('user', before, id) });
+    await this.auditService.audit(req, { action: 'NGUOI_DUNG_XOA', target: labelOf('user', before, id) });
     return r;
   }
 }

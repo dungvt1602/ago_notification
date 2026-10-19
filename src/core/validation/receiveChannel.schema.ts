@@ -1,11 +1,11 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 // Kênh NHẬN (webhook) — cùng cấu trúc kênh gửi. api_key_env chứa TÊN biến env (verify token).
 export const createReceiveChannelSchema = z.object({
-  name: z.string().min(1, "Thiếu tên kênh"),
-  type: z.string().min(1, "Thiếu loại kênh"), // TELEGRAM | ZALO | WHATSAPP
-  accountId: z.string().min(1, "Thiếu account id"), // phone_number_id / OA id / bot id NHẬN
-  apiKeyEnv: z.string().min(1, "Thiếu tên biến env (verify token)"),
+  name: z.string().min(1, 'Thiếu tên kênh'),
+  type: z.string().min(1, 'Thiếu loại kênh'), // TELEGRAM | ZALO | WHATSAPP
+  accountId: z.string().min(1, 'Thiếu account id'), // phone_number_id / OA id / bot id NHẬN
+  apiKeyEnv: z.string().min(1, 'Thiếu tên biến env (verify token)'),
   note: z.string().nullish(),
   isActive: z.boolean().optional(),
 });

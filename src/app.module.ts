@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuditModule } from './common/audit/audit.module';
 import { CommonModule } from './common/common.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -8,6 +9,7 @@ import { CustomersModule } from './modules/customers/customers.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { HealthModule } from './modules/health/health.module';
 import { InboundModule } from './modules/inbound/inbound.module';
+import { NotificationModule } from './modules/notification/notification.module';
 import { QuotationsModule } from './modules/quotations/quotations.module';
 import { ReceiveChannelsModule } from './modules/receive-channels/receive-channels.module';
 import { SendModule } from './modules/send/send.module';
@@ -24,6 +26,7 @@ import { ZaloModule } from './modules/zalo/zalo.module';
 @Module({
   imports: [
     CommonModule,
+    AuditModule,
     AuthModule,
     UsersModule,
     ChannelsModule,
@@ -34,6 +37,7 @@ import { ZaloModule } from './modules/zalo/zalo.module';
     SendModule,
     ActivityModule,
     InboundModule,
+    NotificationModule,
     DashboardModule,
     HealthModule,
     CronModule,

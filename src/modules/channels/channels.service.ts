@@ -7,12 +7,16 @@ import {
   type CreateChannelInput,
   type UpdateChannelInput,
 } from '@core/validation/channel.schema';
-import { audit, snapshot, labelOf, diffSummary } from '@core/services/auditService';
+import { AuditService } from '@common/audit/audit.service';
+import { labelOf, diffSummary } from '@common/audit/audit.helpers';
 import { ChannelsRepository } from './channels.repository';
 
 @Injectable()
 export class ChannelsService {
-  constructor(private readonly repo: ChannelsRepository) {}
+  constructor(
+    private readonly repo: ChannelsRepository,
+    private readonly auditService: AuditService,
+  ) {}
 
   listChannels() {
     return this.repo.findAll();
@@ -53,7 +57,7 @@ export class ChannelsService {
   async create(body: unknown, req: ReqLike) {
     const input = createChannelSchema.parse(body);
     const c = await this.createChannel(input);
-    await audit(req, {
+    await this.auditService.audit(req, {
       action: 'KENH_GUI_TAO',
       target: labelOf('channel', c as unknown as Record<string, unknown>),
       note: diffSummary(null, input as Record<string, unknown>),
@@ -63,9 +67,9 @@ export class ChannelsService {
 
   async update(id: string, body: unknown, req: ReqLike) {
     const input = updateChannelSchema.parse(body);
-    const before = await snapshot('channel', id);
+    const before = await this.auditService.snapshot('channel', id);
     const r = await this.updateChannel(id, input);
-    await audit(req, {
+    await this.auditService.audit(req, {
       action: 'KENH_GUI_SUA',
       target: labelOf('channel', before, id),
       note: diffSummary(before, input as Record<string, unknown>) || 'không đổi gì',
@@ -74,9 +78,9 @@ export class ChannelsService {
   }
 
   async remove(id: string, req: ReqLike) {
-    const before = await snapshot('channel', id);
+    const before = await this.auditService.snapshot('channel', id);
     const r = await this.deleteChannel(id);
-    await audit(req, { action: 'KENH_GUI_XOA', target: labelOf('channel', before, id) });
+    await this.auditService.audit(req, { action: 'KENH_GUI_XOA', target: labelOf('channel', before, id) });
     return r;
   }
 }

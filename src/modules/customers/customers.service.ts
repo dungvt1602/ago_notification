@@ -9,7 +9,8 @@ import {
   type PatchCustomerInput,
 } from '@core/validation/customer.schema';
 import { detectPhoneType } from '@core/lib/phoneType';
-import { audit, snapshot, labelOf, diffSummary } from '@core/services/auditService';
+import { AuditService } from '@common/audit/audit.service';
+import { labelOf, diffSummary } from '@common/audit/audit.helpers';
 import { CustomersRepository, type CustomerWithLinks } from './customers.repository';
 
 export type ListCustomersOptions = {
@@ -104,7 +105,10 @@ function cleanImportRow(raw: unknown): unknown {
 
 @Injectable()
 export class CustomersService {
-  constructor(private readonly repo: CustomersRepository) {}
+  constructor(
+    private readonly repo: CustomersRepository,
+    private readonly auditService: AuditService,
+  ) {}
 
   // ---- Logic gốc (tên/chữ ký giữ nguyên, module khác gọi trực tiếp) ----
 
@@ -292,7 +296,7 @@ export class CustomersService {
   async createWithAudit(body: unknown, req: Request) {
     const input = createCustomerSchema.parse(body);
     const c = await this.createCustomer(input);
-    await audit(webReq(req), {
+    await this.auditService.audit(webReq(req), {
       action: 'KHACH_HANG_TAO',
       target: labelOf('customer', c as unknown as Record<string, unknown>),
       note: diffSummary(null, input as Record<string, unknown>),
@@ -305,7 +309,7 @@ export class CustomersService {
     const ids = Array.isArray(body.ids) ? body.ids.map(String).filter((s) => /^\d+$/.test(s)) : [];
     if (!ids.length) throw new Error('Chưa chọn khách nào.');
     const r = await this.deleteCustomersBulk(ids);
-    await audit(webReq(req), {
+    await this.auditService.audit(webReq(req), {
       action: 'KHACH_HANG_XOA',
       target: `${r.deleted} khách hàng`,
       note: r.sample.length ? `vd: ${r.sample.join(', ')}${r.deleted > r.sample.length ? '…' : ''}` : null,
@@ -321,7 +325,7 @@ export class CustomersService {
       .filter(([, v]) => typeof v === 'number')
       .map(([k, v]) => `${k}: ${v}`)
       .join(', ');
-    await audit(webReq(req), {
+    await this.auditService.audit(webReq(req), {
       action: 'KHACH_HANG_NHAP_FILE',
       target: `${rows.length} dòng`,
       note: summary || null,
@@ -331,9 +335,9 @@ export class CustomersService {
 
   async updateWithAudit(id: string, body: unknown, req: Request) {
     const input = patchCustomerSchema.parse(body);
-    const before = await snapshot('customer', id);
+    const before = await this.auditService.snapshot('customer', id);
     const r = await this.updateCustomer(id, input);
-    await audit(webReq(req), {
+    await this.auditService.audit(webReq(req), {
       action: 'KHACH_HANG_SUA',
       target: labelOf('customer', before, id),
       note: diffSummary(before, input as Record<string, unknown>) || 'không đổi gì',
@@ -342,9 +346,9 @@ export class CustomersService {
   }
 
   async removeWithAudit(id: string, req: Request) {
-    const before = await snapshot('customer', id);
+    const before = await this.auditService.snapshot('customer', id);
     const r = await this.deleteCustomer(id);
-    await audit(webReq(req), {
+    await this.auditService.audit(webReq(req), {
       action: 'KHACH_HANG_XOA',
       target: labelOf('customer', before, id),
       note: before ? [before.phone, before.whatsappPhone, before.market].filter(Boolean).join(' · ') : null,

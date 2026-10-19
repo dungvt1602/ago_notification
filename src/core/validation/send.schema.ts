@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 const numOrStr = z.union([z.number(), z.string()]);
 const actor = z.object({ id: numOrStr.nullish(), name: z.string().nullish() }).optional();
