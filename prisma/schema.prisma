@@ -1,0 +1,507 @@
+// Prisma schema cho app báo giá (chuyển từ Telegram bot sang DB)
+// Sinh từ thiết kế DBML. DB: PostgreSQL (Supabase).
+//
+// Lệnh thường dùng:
+//   npx prisma migrate dev --name init   -> tạo migration + áp vào DB
+//   npx prisma generate                  -> sinh lại Prisma Client
+//   npx prisma studio                    -> mở GUI xem/sửa dữ liệu
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 7: connection URL không còn đặt ở đây nữa.
+  // - Migrate/introspect: lấy từ prisma.config.ts (DIRECT_URL, port 5432)
+  // - Runtime: PrismaClient dùng driver adapter với DATABASE_URL (pooler 6543)
+}
+
+// ============================================================
+// KÊNH GỬI BÁO GIÁ
+// ============================================================
+
+// Mỗi dòng = 1 tài khoản trên 1 nền tảng (Telegram / Zalo / WhatsApp)
+// dùng để gửi báo giá cho khách.
+//
+// QUAN TRỌNG: KHÔNG lưu API key thật trong DB.
+// Cột `api_key_env` chỉ lưu TÊN biến môi trường (string), key thật nằm ở .env.
+// Ví dụ: api_key_env = "TELEGRAM_BOT_TOKEN_MAIN" -> đọc process.env["TELEGRAM_BOT_TOKEN_MAIN"].
+model Channel {
+  id        BigInt    @id @default(autoincrement())
+  name      String    @db.VarChar(150) // tên hiển thị của kênh, vd "Telegram CSKH"
+  type      String    @db.VarChar(20) // TELEGRAM | ZALO | WHATSAPP
+  accountId String    @map("account_id") @db.VarChar(255) // id tài khoản trên nền tảng (bot id / OA id / phone id)
+  apiKeyEnv String    @map("api_key_env") @db.VarChar(100) // TÊN biến env chứa API key (KHÔNG phải key thật)
+  isActive  Boolean   @default(true) @map("is_active")
+  note      String?   @db.Text
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  templates   Template[]
+  sendBatches SendBatch[]
+
+  @@unique([type, accountId]) // tránh trùng 1 tài khoản trên cùng nền tảng
+  @@map("channels")
+}
+
+// ============================================================
+// KHO SẢN PHẨM (danh mục dùng chung — giống product rows của bot)
+
+// ============================================================
+// NGƯỜI DÙNG & PHÂN QUYỀN
+// ============================================================
+
+model User {
+  id           BigInt    @id @default(autoincrement())
+  username     String    @unique @db.VarChar(100)
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  fullName     String?   @map("full_name") @db.VarChar(255)
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt    DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  // N-N: user <-> role (qua bảng user_roles)
+  userRoles UserRole[]
+  // N-N: user <-> quotation (qua bảng user_quotations)
+  userQuotations UserQuotation[]
+  // Người thực hiện thay đổi trong audit_logs (changed_by)
+  auditLogsChanged AuditLog[] @relation("AuditLogChangedBy")
+  // Kích hoạt Zalo: nhận phản hồi khách về Zalo cá nhân (mã 6 số nhắn vào OA)
+  zaloBinding     ZaloUserBinding?
+  zaloLinkRequest ZaloLinkRequest?
+
+  @@map("users")
+}
+
+model Role {
+  id          BigInt   @id @default(autoincrement())
+  code        String   @unique @db.VarChar(50)
+  name        String   @db.VarChar(100)
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  userRoles UserRole[]
+
+  @@map("roles")
+}
+
+// N-N: user <-> role. Khoá chính kép (user_id, role_id).
+model UserRole {
+  userId     BigInt   @map("user_id")
+  roleId     BigInt   @map("role_id")
+  assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamp(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ============================================================
+// BÁO GIÁ
+// ============================================================
+
+model Quotation {
+  id          BigInt    @id @default(autoincrement())
+  code        String    @unique @db.VarChar(50)
+  title       String?   @db.VarChar(255)
+  totalAmount Decimal   @default(0) @map("total_amount") @db.Decimal(18, 2)
+  currency    String    @default("VND") @db.VarChar(10)
+  status      String    @default("DRAFT") @db.VarChar(30)
+  market      String?   @db.VarChar(50) // thị trường (INDIA, UAE, NOI_DIA...) — tuỳ chọn
+  issuedDate  DateTime? @map("issued_date") @db.Date
+  validUntil  DateTime? @map("valid_until") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt   DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  // N-N: user <-> quotation
+  userQuotations UserQuotation[]
+  // 1-N: quotation -> quotation_template_sends (legacy)
+  templateSends QuotationTemplateSend[]
+  // 1-N: quotation -> template (mỗi báo giá có nhiều template)
+  templates   Template[]
+  // 1-N: quotation -> lệnh gửi
+  sendBatches SendBatch[]
+  // 1-N: quotation -> dòng sản phẩm (mặt hàng báo giá)
+  items       QuotationItem[]
+
+  @@map("quotations")
+}
+
+// Dòng sản phẩm của báo giá (≈ product rows từ sheet của bot).
+// Nhập tên tự do (chưa dùng danh mục chung). Thành tiền = quantity * price.
+model QuotationItem {
+  id          BigInt   @id @default(autoincrement())
+  quotationId BigInt   @map("quotation_id")
+  no          Int      @default(0) // số thứ tự
+  product     String   @db.VarChar(255) // tên mặt hàng
+  packing     String?  @db.VarChar(150) // quy cách đóng gói
+  unit        String?  @db.VarChar(50) // đơn vị
+  quantity    Decimal  @default(1) @db.Decimal(18, 3)
+  price       Decimal  @default(0) @db.Decimal(18, 2) // đơn giá
+  note        String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  @@index([quotationId])
+  @@map("quotation_items")
+}
+
+// N-N: user <-> báo giá. Khoá chính kép (user_id, quotation_id).
+model UserQuotation {
+  userId          BigInt   @map("user_id")
+  quotationId     BigInt   @map("quotation_id")
+  roleInQuotation String?  @map("role_in_quotation") @db.VarChar(30) // OWNER / APPROVER / VIEWER...
+  assignedAt      DateTime @default(now()) @map("assigned_at") @db.Timestamp(6)
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  @@id([userId, quotationId])
+  @@map("user_quotations")
+}
+
+// ============================================================
+// DANH MỤC & TEMPLATE
+// ============================================================
+
+model Category {
+  id        BigInt   @id @default(autoincrement())
+  name      String   @db.VarChar(150)
+  slug      String?  @unique @db.VarChar(150)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  // 1-N: category -> template
+  templates Template[]
+
+  @@map("categories")
+}
+
+model Template {
+  id          BigInt    @id @default(autoincrement())
+  categoryId  BigInt?   @map("category_id") // tuỳ chọn (template có thể thuộc báo giá thay vì danh mục)
+  quotationId BigInt?   @map("quotation_id") // báo giá chứa template này
+  channelId   BigInt?   @map("channel_id") // kênh gửi mặc định của template
+  name        String    @db.VarChar(200)
+  icon        String?   @db.VarChar(20)
+  subject     String?   @db.VarChar(255)
+  body        String?   @db.Text // nội dung tin nhắn, có biến {khách hàng}, {mã}, {giá}...
+  // Cấu hình gửi bằng WhatsApp template đã duyệt (giống bot). Trống = gửi text thường.
+  waTemplateName String? @map("wa_template_name") @db.VarChar(100) // tên template Meta đã duyệt
+  waLanguage     String  @default("vi") @map("wa_language") @db.VarChar(10)
+  waCategory     String? @map("wa_category") @db.VarChar(30) // MARKETING | UTILITY | AUTHENTICATION (theo Meta)
+  waImage        Boolean @default(true) @map("wa_image") // gửi kèm ảnh báo giá làm header
+  // Bật = gửi TEXT thường (bảng giá dạng chữ, chỉ trong cửa sổ 24h, không ảnh) dù đã khai
+  // waTemplateName. Tắt (mặc định) = gửi bằng template Meta nếu có waTemplateName.
+  sendAsText     Boolean @default(false) @map("send_as_text")
+  // Tham số phần body khi gửi template Meta, ngăn cách bằng dấu phẩy.
+  // "customer_name={khách hàng}" -> biến có tên (Loại biến = Tên trên WhatsApp Manager)
+  // "{khách hàng}, {mã}"         -> biến vị trí {{1}}, {{2}}
+  // Trống -> 1 biến vị trí = tên khách (giữ nguyên hành vi cũ).
+  waBodyParams   String? @map("wa_body_params") @db.VarChar(500)
+  waFlow         Boolean @default(true) @map("wa_flow") // mọi template đều có nút Flow -> luôn gửi kèm component nút Flow (giống bot)
+  autoReply      Boolean @default(false) @map("auto_reply") // mẫu TRẢ LỜI tự động khi khách reply/bấm Flow (chỉ nên bật 1 mẫu)
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt   DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  category      Category?               @relation(fields: [categoryId], references: [id])
+  quotation     Quotation?              @relation(fields: [quotationId], references: [id])
+  channel       Channel?                @relation(fields: [channelId], references: [id])
+  // 1-N: template -> quotation_template_sends (legacy)
+  templateSends QuotationTemplateSend[]
+  // N-N: template <-> customer (qua bảng nối template_customers)
+  customerLinks TemplateCustomer[]
+  // 1-N: template -> lệnh gửi
+  sendBatches   SendBatch[]
+  // 1-1: ảnh header do người dùng upload (gửi kèm khi dùng WhatsApp template) — giống bot
+  image         TemplateImage?
+
+  // Index hỗ trợ màn Template (tìm kiếm + phân trang):
+  @@index([quotationId]) // lọc/join theo báo giá (search theo mã báo giá, listByQuotation, pool)
+  @@index([createdAt]) // orderBy createdAt desc khi phân trang
+  @@map("templates")
+}
+
+// Ảnh do người dùng upload cho template (lưu bytes trong DB). Tách bảng để query template thường không tải bytes.
+model TemplateImage {
+  templateId  BigInt   @id @map("template_id")
+  data        Bytes? // bytes ảnh (legacy — ảnh mới lưu Supabase Storage, cột này null)
+  storagePath String?  @map("storage_path") @db.VarChar(255) // path trong bucket template-images
+  waMediaId   String?  @map("wa_media_id") @db.VarChar(255) // cache media id WhatsApp (đỡ upload lại mỗi lần trả lời tự động)
+  waMediaAt   DateTime? @map("wa_media_at") @db.Timestamp(6) // lúc upload media (media Meta sống ~30 ngày)
+  mime        String   @default("image/png") @db.VarChar(50)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@map("template_images")
+}
+
+// Template gửi báo giá. 1-N từ quotation và từ template.
+model QuotationTemplateSend {
+  id          BigInt    @id @default(autoincrement())
+  quotationId BigInt    @map("quotation_id")
+  templateId  BigInt    @map("template_id")
+  sentTo      String?   @map("sent_to") @db.VarChar(255)
+  sentAt      DateTime? @map("sent_at") @db.Timestamp(6)
+  status      String    @default("PENDING") @db.VarChar(30)
+  note        String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id])
+  template  Template  @relation(fields: [templateId], references: [id])
+
+  @@map("quotation_template_sends")
+}
+
+// ============================================================
+// KHÁCH HÀNG & AUDIT LOG
+// ============================================================
+
+model Customer {
+  id               BigInt   @id @default(autoincrement())
+  name             String   @db.VarChar(255)
+  company          String?  @db.VarChar(255) // công ty của khách hàng
+  phone            String?  @db.VarChar(30)
+  whatsappPhone    String?  @map("whatsapp_phone") @db.VarChar(30) // số nhận WhatsApp
+  email            String?  @db.VarChar(255)
+  address          String?  @db.Text
+  market           String?  @db.VarChar(50)
+  status           String   @default("ACTIVE") @db.VarChar(20) // ACTIVE | INACTIVE
+  receiveQuotation Boolean  @default(true) @map("receive_quotation") // có nhận báo giá không
+  note             String?  @db.Text // ghi chú (import từ GHI_CHU của sheet bot)
+  // Loại số (suy từ dãy số bằng libphonenumber-js): MOBILE | FIXED_LINE | AMBIGUOUS | UNKNOWN.
+  // Trạng thái WhatsApp (suy từ kết quả gửi thật, tín hiệu YẾU): null | NO_WHATSAPP.
+  phoneType        String?  @map("phone_type") @db.VarChar(20)
+  waStatus         String?  @map("wa_status") @db.VarChar(20)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  // N-N: customer <-> template (qua bảng nối template_customers)
+  templateLinks TemplateCustomer[]
+  // 1-1: customer -> audit_log
+  auditLog AuditLog?
+  sendJobs SendJob[]
+  // 1-N: customer -> tin nhắn khách trả lời (khớp theo SĐT lúc nhận webhook)
+  inboundMessages InboundMessage[]
+
+  // Index hỗ trợ màn Khách hàng (tìm kiếm + lọc + phân trang):
+  @@index([market]) // lọc theo quốc gia + dropdown distinct market
+  @@index([name]) // orderBy name asc khi phân trang
+  @@index([phoneType]) // bộ lọc Loại số
+  @@map("customers")
+}
+
+// Bảng nối N-N: 1 khách có thể vào nhiều template và 1 template có nhiều khách.
+model TemplateCustomer {
+  templateId BigInt   @map("template_id")
+  customerId BigInt   @map("customer_id")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@id([templateId, customerId])
+  @@index([customerId])
+  @@map("template_customers")
+}
+
+// 1-1 với customer (customer_id unique). changed_by tham chiếu users.
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  customerId BigInt   @unique @map("customer_id")
+  action     String?  @db.VarChar(50)
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  changedBy  BigInt?  @map("changed_by")
+  changedAt  DateTime @default(now()) @map("changed_at") @db.Timestamp(6)
+
+  customer      Customer @relation(fields: [customerId], references: [id])
+  changedByUser User?    @relation("AuditLogChangedBy", fields: [changedBy], references: [id])
+
+  @@map("audit_logs")
+}
+
+// ============================================================
+// LUỒNG GỬI BÁO GIÁ (mượn logic bot Telegram)
+// Báo giá -> Template -> nhiều Khách hàng. Chọn 1 template = gửi cho khách của nó.
+// ============================================================
+
+// Lệnh gửi (≈ LENH_GUI_BAO_GIA). Mỗi lần bấm gửi 1 template tạo 1 batch.
+model SendBatch {
+  id             BigInt    @id @default(autoincrement())
+  code           String    @unique @db.VarChar(50) // BG<datetime>
+  quotationId    BigInt    @map("quotation_id")
+  templateId     BigInt    @map("template_id")
+  channelId      BigInt?   @map("channel_id")
+  createdBy      BigInt?   @map("created_by")
+  recipientCount Int       @default(0) @map("recipient_count")
+  mediaId        String?   @map("media_id") @db.VarChar(255) // WhatsApp media id (ảnh upload 1 lần/lệnh)
+  // PREVIEW -> QUEUED -> SENDING -> SENT | PARTIAL_FAILED | CANCELLED
+  status         String    @default("PREVIEW") @db.VarChar(20)
+  note           String?   @db.Text
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt      DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id])
+  template  Template  @relation(fields: [templateId], references: [id])
+  channel   Channel?  @relation(fields: [channelId], references: [id])
+  jobs      SendJob[]
+
+  @@index([status])
+  @@map("send_batches")
+}
+
+// Hàng đợi gửi từng khách (≈ LOG_GUI_WHATSAPP). Worker xử lý, retry tối đa 3 lần.
+model SendJob {
+  id         BigInt    @id @default(autoincrement())
+  batchId    BigInt    @map("batch_id")
+  customerId BigInt?   @map("customer_id")
+  toName     String?   @map("to_name") @db.VarChar(255)
+  toPhone    String?   @map("to_phone") @db.VarChar(30)
+  channel    String    @db.VarChar(20) // WHATSAPP | ZALO | TELEGRAM
+  message    String?   @db.Text // nội dung đã render sẵn cho khách này
+  // QUEUED -> SENDING -> SENT -> DELIVERED -> READ | FAILED | HOLD (chờ hạn mức)
+  status     String    @default("QUEUED") @db.VarChar(20)
+  messageId  String?   @map("message_id") @db.VarChar(255)
+  error      String?   @db.Text
+  retryCount Int       @default(0) @map("retry_count")
+  sentAt     DateTime? @map("sent_at") @db.Timestamp(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt  DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  batch    SendBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([status])
+  @@index([batchId]) // worker query/count theo batch (luồng gửi nóng nhất)
+  @@index([createdAt]) // listSendJobs (lọc + orderBy desc) & cleanupSendJobs (deleteMany theo createdAt)
+  @@index([messageId]) // webhook cập nhật trạng thái giao (updateDeliveryStatus) theo messageId — trước đây quét cả bảng
+  @@index([status, sentAt]) // đếm hạn mức 24h (countUsed24h): lọc status IN + range sentAt
+  @@unique([batchId, customerId]) // 1 lệnh không thể có 2 tin cho cùng 1 khách (chốt chặn gửi trùng)
+  @@map("send_jobs")
+}
+
+// Nhật ký hoạt động (≈ LOG_HOAT_DONG) — cấp cho màn hình Nhật ký.
+model ActivityLog {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt?  @map("user_id")
+  actorName String?  @map("actor_name") @db.VarChar(255)
+  action    String   @db.VarChar(50)
+  target    String?  @db.VarChar(255)
+  result    String?  @db.VarChar(20) // SUCCESS | FAILED
+  note      String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+// KÊNH NHẬN: tài khoản/ số dùng để NHẬN tin khách (webhook). Song song với Channel (kênh gửi).
+// Cùng cấu trúc: DB chỉ lưu TÊN biến env (api_key_env) chứa verify token, KHÔNG lưu giá trị thật.
+model ReceiveChannel {
+  id        BigInt    @id @default(autoincrement())
+  name      String    @db.VarChar(150) // tên hiển thị, vd "WhatsApp AGO nhận"
+  type      String    @db.VarChar(20) // TELEGRAM | ZALO | WHATSAPP
+  accountId String    @map("account_id") @db.VarChar(255) // id tài khoản NHẬN (phone_number_id / OA id / bot id)
+  apiKeyEnv String    @map("api_key_env") @db.VarChar(100) // TÊN biến env chứa verify token / token (KHÔNG phải giá trị)
+  isActive  Boolean   @default(true) @map("is_active")
+  note      String?   @db.Text
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime? @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  inboundMessages InboundMessage[]
+
+  @@unique([type, accountId]) // tránh trùng 1 tài khoản nhận trên cùng nền tảng
+  @@map("receive_channels")
+}
+
+// Cài đặt hệ thống dạng key-value (vd waba_id tự bắt từ webhook WhatsApp).
+model AppSetting {
+  key       String   @id @db.VarChar(100)
+  value     String   @db.Text
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@map("app_settings")
+}
+
+// Tin nhắn KHÁCH TRẢ LỜI (đến từ webhook WhatsApp). Khớp customer theo SĐT.
+// kind: message = khách nhắn thường; flow_response = khách bấm nút Flow (đặt lịch...).
+model InboundMessage {
+  id          BigInt   @id @default(autoincrement())
+  waMessageId String?  @unique @map("wa_message_id") @db.VarChar(255) // chống trùng khi Meta gửi lại
+  fromPhone   String   @map("from_phone") @db.VarChar(30) // WhatsApp: SĐT; Zalo: user_id (UID)
+  fromName    String?  @map("from_name") @db.VarChar(255) // tên hiển thị (Zalo lấy qua getprofile vì không có SĐT)
+  customerId  BigInt?  @map("customer_id")
+  receiveChannelId BigInt? @map("receive_channel_id") // kênh nhận (khớp theo phone_number_id của Meta)
+  channel     String   @default("WHATSAPP") @db.VarChar(20)
+  kind        String   @default("message") @db.VarChar(20) // message | flow_response
+  type        String?  @db.VarChar(30) // text | interactive | button | image...
+  text        String?  @db.Text // nội dung đã tóm tắt để hiển thị
+  raw         Json? // payload gốc để soi khi cần
+  autoReplied Boolean  @default(false) @map("auto_replied") // đã gửi template trả lời tự động cho tin này
+  receivedAt  DateTime @default(now()) @map("received_at") @db.Timestamp(6)
+
+  customer       Customer?       @relation(fields: [customerId], references: [id])
+  receiveChannel ReceiveChannel? @relation(fields: [receiveChannelId], references: [id], onDelete: SetNull)
+
+  @@index([receivedAt])
+  @@index([customerId])
+  @@index([receiveChannelId])
+  @@map("inbound_messages")
+}
+
+// ============================================================
+// ZALO OA — TOKEN OAUTH v4 (tự làm mới)
+// ============================================================
+
+// Cặp token của Zalo OA. KHÁC nguyên tắc "DB không lưu key thật" của bảng channels vì
+// token Zalo XOAY VÒNG tự động (access_token sống ~1-25h, refresh_token ~3 tháng, và mỗi lần
+// làm mới Zalo cấp refresh_token MỚI, vô hiệu cái cũ) -> không thể đặt cố định trong .env.
+// Lần đầu lấy qua luồng cấp quyền PKCE ở màn "Zalo OA" (hoặc bootstrap từ ZALO_OA_REFRESH_TOKEN);
+// từ đó job nền + lazy refresh tự đổi refresh_token lấy cặp mới, không cần đặt tay nữa.
+model ZaloOaToken {
+  oaId         String   @id @map("oa_id") @db.VarChar(50)
+  accessToken  String   @map("access_token") @db.Text
+  refreshToken String   @map("refresh_token") @db.Text
+  expiresAt    DateTime @map("expires_at") @db.Timestamp(6) // lúc access_token hết hạn (theo expires_in Zalo trả)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@map("zalo_oa_tokens")
+}
+
+// ============================================================
+// KÍCH HOẠT ZALO CHO NGƯỜI DÙNG (mirror zalo_user_bindings / zalo_link_requests của worker Go)
+// Bấm "Kích hoạt Zalo" -> app cấp mã 6 số (sống 10 phút) -> người dùng nhắn mã vào OA
+// -> webhook bắt được -> gắn user_id Zalo với tài khoản + tự tạo kênh nhận ZALO
+// -> từ đó mọi phản hồi khách (WhatsApp/Zalo) được báo về Zalo người đó.
+// ============================================================
+
+model ZaloUserBinding {
+  userId     BigInt   @id @map("user_id")
+  zaloUserId String   @unique @map("zalo_user_id") @db.VarChar(50) // user_id theo OA (KHÔNG phải SĐT)
+  zaloName   String?  @map("zalo_name") @db.VarChar(255) // tên hiển thị Zalo lúc kích hoạt
+  status     String   @default("ACTIVE") @db.VarChar(20)
+  linkedAt   DateTime @default(now()) @map("linked_at") @db.Timestamp(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("zalo_user_bindings")
+}
+
+// Mã kích hoạt: 1 mã / user, dùng 1 lần, hết hạn sau 10 phút (xoá ngay khi dùng).
+model ZaloLinkRequest {
+  userId    BigInt   @id @map("user_id")
+  code      String   @unique @db.VarChar(10)
+  expiresAt DateTime @map("expires_at") @db.Timestamp(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("zalo_link_requests")
+}

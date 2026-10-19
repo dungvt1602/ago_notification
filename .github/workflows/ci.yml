@@ -1,0 +1,41 @@
+name: CI
+
+# Cổng chất lượng: giống `npm run verify` ở máy dev (lint -> build -> test).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: lint · build · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # prisma.config.ts cần DIRECT_URL khi `prisma generate` (postinstall); không kết nối DB thật.
+      DIRECT_URL: postgresql://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
