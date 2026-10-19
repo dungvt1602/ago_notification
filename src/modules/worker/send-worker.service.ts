@@ -42,7 +42,9 @@ export class SendWorkerService implements OnApplicationBootstrap, OnModuleDestro
         if (running) return;
         running = true;
         processNextBatch()
-          .catch((err) => this.log.error(`[sendWorker] error: ${err instanceof Error ? err.stack : String(err)}`))
+          .catch((err) =>
+            this.log.error(`[sendWorker] error: ${err instanceof Error ? err.stack : String(err)}`),
+          )
           .finally(() => {
             running = false;
           });
