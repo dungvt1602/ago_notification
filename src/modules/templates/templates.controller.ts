@@ -18,6 +18,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { handle } from '@common/http/handle';
+import { JsonBody, LenientJsonBody } from '@common/http/json-body';
 import { webReq } from '@common/http/web-request';
 import { TemplatesService, type TemplateListQuery } from './templates.service';
 
@@ -32,7 +33,7 @@ export class TemplatesController {
 
   @Post()
   @HttpCode(200)
-  create(@Req() req: Request, @Body() body: unknown) {
+  create(@Req() req: Request, @JsonBody() body: unknown) {
     return handle(() => this.service.create(webReq(req), body));
   }
 
@@ -50,7 +51,7 @@ export class TemplatesController {
   }
 
   @Patch(':id')
-  update(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+  update(@Req() req: Request, @Param('id') id: string, @JsonBody() body: unknown) {
     return handle(() => this.service.update(webReq(req), id, body));
   }
 
@@ -66,19 +67,19 @@ export class TemplatesController {
 
   @Post(':id/customers')
   @HttpCode(200)
-  createCustomerFor(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+  createCustomerFor(@Req() req: Request, @Param('id') id: string, @JsonBody() body: unknown) {
     return handle(() => this.service.createCustomerFor(webReq(req), id, body));
   }
 
   @Post(':id/customers/link')
   @HttpCode(200)
-  link(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+  link(@Req() req: Request, @Param('id') id: string, @JsonBody() body: unknown) {
     return handle(() => this.service.link(webReq(req), id, body));
   }
 
   @Post(':id/customers/unlink')
   @HttpCode(200)
-  unlink(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+  unlink(@Req() req: Request, @Param('id') id: string, @LenientJsonBody() body: unknown) {
     return handle(() => this.service.unlink(webReq(req), id, body));
   }
 

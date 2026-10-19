@@ -1,6 +1,7 @@
-import { Body, Controller, Get, HttpCode, Post, Query, Req, Res } from '@nestjs/common';
+import { Controller, Get, HttpCode, Post, Query, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { handle } from '@common/http/handle';
+import { LenientJsonBody } from '@common/http/json-body';
 import { webReq } from '@common/http/web-request';
 import { ZaloService } from './zalo.service';
 
@@ -37,19 +38,19 @@ export class ZaloController {
 
   @Post('test')
   @HttpCode(200)
-  test(@Req() req: Request, @Body() rawBody: unknown) {
+  test(@Req() req: Request, @LenientJsonBody() rawBody: unknown) {
     return handle(() => this.zalo.test(webReq(req), rawBody));
   }
 
   @Post('oauth/start')
   @HttpCode(200)
-  oauthStart(@Req() req: Request, @Body() rawBody: unknown) {
+  oauthStart(@Req() req: Request, @LenientJsonBody() rawBody: unknown) {
     return handle(() => this.zalo.oauthStart(webReq(req), rawBody));
   }
 
   @Post('oauth/exchange')
   @HttpCode(200)
-  oauthExchange(@Body() rawBody: unknown) {
+  oauthExchange(@LenientJsonBody() rawBody: unknown) {
     return handle(() => this.zalo.oauthExchange(rawBody));
   }
 

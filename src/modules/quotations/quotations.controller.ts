@@ -3,7 +3,6 @@
  * /api/quotations/[id]/templates.
  */
 import {
-  Body,
   Controller,
   Delete,
   Get,
@@ -17,6 +16,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { handle } from '@common/http/handle';
+import { JsonBody } from '@common/http/json-body';
 import { webReq } from '@common/http/web-request';
 import { QuotationsService } from './quotations.service';
 
@@ -31,7 +31,7 @@ export class QuotationsController {
 
   @Post()
   @HttpCode(200)
-  create(@Req() req: Request, @Body() body: unknown) {
+  create(@Req() req: Request, @JsonBody() body: unknown) {
     return handle(() => this.service.create(webReq(req), body));
   }
 
@@ -43,7 +43,7 @@ export class QuotationsController {
   }
 
   @Patch(':id')
-  update(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+  update(@Req() req: Request, @Param('id') id: string, @JsonBody() body: unknown) {
     return handle(() => this.service.update(webReq(req), id, body));
   }
 
@@ -58,7 +58,7 @@ export class QuotationsController {
   }
 
   @Put(':id/items')
-  putItems(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+  putItems(@Req() req: Request, @Param('id') id: string, @JsonBody() body: unknown) {
     return handle(() => this.service.putItems(webReq(req), id, body));
   }
 
@@ -69,7 +69,7 @@ export class QuotationsController {
 
   @Post(':id/templates')
   @HttpCode(200)
-  createTpl(@Req() req: Request, @Param('id') id: string, @Body() body: unknown) {
+  createTpl(@Req() req: Request, @Param('id') id: string, @JsonBody() body: unknown) {
     return handle(() => this.service.createTemplate(webReq(req), id, body));
   }
 }

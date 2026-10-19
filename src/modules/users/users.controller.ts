@@ -1,7 +1,8 @@
 /* Cổng từ Next: /api/users, /api/users/[id], /api/users/[id]/zalo, /api/users/[id]/zalo/link-code. */
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
+import { Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { handle } from '@common/http/handle';
+import { JsonBody } from '@common/http/json-body';
 import { webReq } from '@common/http/web-request';
 import { UsersService } from './users.service';
 
@@ -16,7 +17,7 @@ export class UsersController {
 
   @Post()
   @HttpCode(200)
-  create(@Body() body: unknown, @Req() req: Request) {
+  create(@JsonBody() body: unknown, @Req() req: Request) {
     return handle(() => this.service.create(body, webReq(req)));
   }
 
@@ -37,7 +38,7 @@ export class UsersController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: unknown, @Req() req: Request) {
+  update(@Param('id') id: string, @JsonBody() body: unknown, @Req() req: Request) {
     return handle(() => this.service.update(id, body, webReq(req)));
   }
 

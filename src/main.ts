@@ -3,14 +3,15 @@ import 'reflect-metadata';
 import type { RawBodyRequest } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { raw } from 'express';
+import { raw, text } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
+import { parseJsonText } from '@common/http/json-body';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  // rawBody: webhook WhatsApp/Zalo cần đúng byte gốc để ký/forward (req.rawBody).
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  // Tự đọc body (không dùng parser mặc định): Next đọc `req.json()`/`req.text()` bất kể content-type.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false });
 
   app.set('trust proxy', 1);
   // BigInt -> string (giống json() của bản Next).
@@ -26,7 +27,7 @@ async function bootstrap() {
   app.set('etag', false);
 
   // Webhook: Next đọc `await req.text()` bất kể content-type và không bao giờ từ chối body -> nhận RAW mọi loại
-  // (JSON hỏng vẫn trả 200, tin vẫn được forward nguyên byte). Phải đứng TRƯỚC json parser (parser thấy body đã đọc sẽ bỏ qua).
+  // (JSON hỏng vẫn trả 200, tin vẫn được forward nguyên byte, req.rawBody dùng để ký/forward).
   app.use(
     '/api/webhooks',
     raw({ type: () => true, limit: '10mb' }),
@@ -35,11 +36,14 @@ async function bootstrap() {
       next();
     },
   );
-
-  // Import khách hàng gửi hàng chục nghìn dòng JSON. Ảnh template gửi thô (image/*): để limit rộng, controller tự
-  // trả đúng "Ảnh quá lớn (tối đa 5MB)." như bản Next thay vì 413 của parser.
-  app.useBodyParser('json', { limit: '50mb' });
-  app.useBodyParser('raw', { type: 'image/*', limit: '50mb' });
+  // Ảnh template gửi thô, mọi content-type (thiếu header -> controller mặc định image/png như Next). Limit rộng để
+  // controller tự trả đúng "Ảnh quá lớn (tối đa 5MB)." thay vì 413 của parser.
+  app.use(/^\/api\/templates\/[^/]+\/image$/, (req: Request, res: Response, next: NextFunction) =>
+    req.method === 'POST' ? raw({ type: () => true, limit: '50mb' })(req, res, next) : next(),
+  );
+  // Các route còn lại: đọc chuỗi thô ở mọi content-type rồi parse JSON (lỗi -> req.jsonError, xem json-body.ts).
+  // Import khách hàng gửi hàng chục nghìn dòng nên limit 50mb.
+  app.use(text({ type: () => true, limit: '50mb' }), parseJsonText);
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   const origins = (process.env.CORS_ORIGINS || '')

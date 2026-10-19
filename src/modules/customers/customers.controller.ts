@@ -2,9 +2,10 @@
  * Cổng từ Next: /api/customers, /api/customers/[id], /bulk-delete, /import, /markets, /search.
  * Route tĩnh khai báo TRƯỚC `:id`.
  */
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { handle } from '@common/http/handle';
+import { JsonBody, LenientJsonBody } from '@common/http/json-body';
 import { CustomersService } from './customers.service';
 
 type Q = Record<string, string | undefined>;
@@ -30,7 +31,7 @@ export class CustomersController {
 
   @Post()
   @HttpCode(200)
-  create(@Body() body: unknown, @Req() req: Request) {
+  create(@JsonBody() body: unknown, @Req() req: Request) {
     return handle(() => this.service.createWithAudit(body, req));
   }
 
@@ -75,19 +76,19 @@ export class CustomersController {
   // Xoá hàng loạt khách. Body: { ids: string[] }.
   @Post('bulk-delete')
   @HttpCode(200)
-  bulkDelete(@Body() raw: unknown, @Req() req: Request) {
+  bulkDelete(@LenientJsonBody() raw: unknown, @Req() req: Request) {
     return handle(() => this.service.bulkDeleteWithAudit(raw, req));
   }
 
   // Nhận mảng khách đã map ở client -> tạo hàng loạt.
   @Post('import')
   @HttpCode(200)
-  importFile(@Body() raw: unknown, @Req() req: Request) {
+  importFile(@JsonBody() raw: unknown, @Req() req: Request) {
     return handle(() => this.service.importWithAudit(raw, req));
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: unknown, @Req() req: Request) {
+  update(@Param('id') id: string, @JsonBody() body: unknown, @Req() req: Request) {
     return handle(() => this.service.updateWithAudit(id, body, req));
   }
 

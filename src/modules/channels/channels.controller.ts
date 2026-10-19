@@ -1,7 +1,8 @@
 /* Cổng từ Next: /api/channels và /api/channels/[id] (kênh gửi; chỉ trả api_key_env, không trả key thật). */
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
+import { Controller, Delete, Get, HttpCode, Param, Patch, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { handle } from '@common/http/handle';
+import { JsonBody } from '@common/http/json-body';
 import { webReq } from '@common/http/web-request';
 import { ChannelsService } from './channels.service';
 
@@ -16,12 +17,12 @@ export class ChannelsController {
 
   @Post()
   @HttpCode(200)
-  create(@Body() body: unknown, @Req() req: Request) {
+  create(@JsonBody() body: unknown, @Req() req: Request) {
     return handle(() => this.service.create(body, webReq(req)));
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: unknown, @Req() req: Request) {
+  update(@Param('id') id: string, @JsonBody() body: unknown, @Req() req: Request) {
     return handle(() => this.service.update(id, body, webReq(req)));
   }
 
