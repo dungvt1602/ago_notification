@@ -8,7 +8,7 @@ import tseslint from 'typescript-eslint';
  * Dự án chuyển từ Next.js: logic nghiệp vụ giữ nguyên ở src/core (copy), controller NestJS mỏng ở src/modules.
  */
 export default tseslint.config(
-  { ignores: ['dist/**', 'coverage/**', 'node_modules/**', 'eslint.config.mjs'] },
+  { ignores: ['dist/**', 'coverage/**', 'node_modules/**', 'eslint.config.mjs', 'test/parity/**'] },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   eslintConfigPrettier,
@@ -29,7 +29,7 @@ export default tseslint.config(
   {
     // Code port nguyên văn từ app Next (core/shared) + controller bọc 1:1: không viết lại chỉ để vừa luật phong cách,
     // vì đổi code = rủi ro đổi hành vi. Siết dần khi có test bao phủ.
-    files: ['src/core/**/*.ts', 'src/shared/**/*.ts', 'src/modules/**/*.ts'],
+    files: ['src/core/**/*.ts', 'src/shared/**/*.ts', 'src/modules/**/*.ts', 'src/common/audit/**/*.ts'],
     rules: {
       'no-console': 'off',
       'no-useless-assignment': 'off',

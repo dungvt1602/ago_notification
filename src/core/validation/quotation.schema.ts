@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from 'zod';
 
 const numOrStr = z.union([z.number(), z.string()]);
 // Ngày từ <input type="date"> ("2026-08-20"). Chuỗi rỗng / null = xoá ngày.
@@ -18,7 +18,7 @@ export type CreateQuotationInput = z.infer<typeof createQuotationSchema>;
 
 // Sửa thông tin báo giá (mặt hàng sửa riêng qua /items). Field vắng mặt = giữ nguyên.
 export const updateQuotationSchema = z.object({
-  code: z.string().min(1, "Thiếu mã báo giá").optional(),
+  code: z.string().min(1, 'Thiếu mã báo giá').optional(),
   title: z.string().nullish(),
   currency: z.string().optional(),
   status: z.string().optional(),
@@ -30,7 +30,7 @@ export type UpdateQuotationInput = z.infer<typeof updateQuotationSchema>;
 
 export const itemSchema = z.object({
   no: z.number().optional(),
-  product: z.string().default(""),
+  product: z.string().default(''),
   packing: z.string().nullish(),
   unit: z.string().nullish(),
   quantity: numOrStr.optional(),

@@ -1,10 +1,10 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import { isDryRun } from '@core/lib/whatsapp';
-import { processNextBatch } from '@core/services/sendService';
-import { cleanupSuccessLogs } from '@core/services/activityService';
-import { cleanupSendJobs, cleanupStalePreviewBatches } from '@core/services/sendJobService';
-import { cleanupInbound } from '@core/services/inboundService';
-import { ensureZaloTokenFresh } from '@core/services/zaloTokenService';
+import { ActivityService } from '../activity/activity.service';
+import { InboundService } from '../inbound/inbound.service';
+import { SendJobService } from '../send/send-job.service';
+import { SendService } from '../send/send.service';
+import { ZaloTokenService } from '../zalo/zalo-token.service';
 
 /*
  * Worker nền chạy cùng tiến trình API (port nguyên từ src/instrumentation.ts của bản Next):
@@ -12,6 +12,14 @@ import { ensureZaloTokenFresh } from '@core/services/zaloTokenService';
  */
 @Injectable()
 export class SendWorkerService implements OnApplicationBootstrap, OnModuleDestroy {
+  constructor(
+    private readonly activity: ActivityService,
+    private readonly inbound: InboundService,
+    private readonly sendJobs: SendJobService,
+    private readonly send: SendService,
+    private readonly zaloToken: ZaloTokenService,
+  ) {}
+
   private readonly log = new Logger('SendWorker');
   private timers: NodeJS.Timeout[] = [];
 
@@ -41,8 +49,11 @@ export class SendWorkerService implements OnApplicationBootstrap, OnModuleDestro
       setInterval(() => {
         if (running) return;
         running = true;
-        processNextBatch()
-          .catch((err) => this.log.error(`[sendWorker] error: ${err instanceof Error ? err.stack : String(err)}`))
+        this.send
+          .processNextBatch()
+          .catch((err) =>
+            this.log.error(`[sendWorker] error: ${err instanceof Error ? err.stack : String(err)}`),
+          )
           .finally(() => {
             running = false;
           });
@@ -56,10 +67,10 @@ export class SendWorkerService implements OnApplicationBootstrap, OnModuleDestro
       if (cleaning) return;
       cleaning = true;
       try {
-        const a = await cleanupSuccessLogs(3);
-        const b = await cleanupSendJobs(3);
-        const c = await cleanupInbound(3);
-        const d = await cleanupStalePreviewBatches(1);
+        const a = await this.activity.cleanupSuccessLogs(3);
+        const b = await this.sendJobs.cleanupSendJobs(3);
+        const c = await this.inbound.cleanupInbound(3);
+        const d = await this.sendJobs.cleanupStalePreviewBatches(1);
         if (a || b || c || d) {
           this.log.log(`[logCleanup] xóa -> activity:${a} send_jobs:${b} inbound:${c} preview_bo_do:${d}`);
         }
@@ -73,8 +84,8 @@ export class SendWorkerService implements OnApplicationBootstrap, OnModuleDestro
     this.log.log('[logCleanup] chạy mỗi 10 phút (xóa >3 ngày)');
 
     // Làm mới token Zalo OA mỗi 5 PHÚT (còn < 10 phút thì đổi refresh_token lấy cặp mới).
-    void ensureZaloTokenFresh(true);
-    this.timers.push(setInterval(() => void ensureZaloTokenFresh(true), 5 * 60 * 1000));
+    void this.zaloToken.ensureZaloTokenFresh(true);
+    this.timers.push(setInterval(() => void this.zaloToken.ensureZaloTokenFresh(true), 5 * 60 * 1000));
     this.log.log('[zaloToken] job làm mới token Zalo OA chạy mỗi 5 phút');
   }
 

@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool } from 'pg';
 
 // DÙNG CHUNG TOKEN ZALO VỚI WORKER GO (ago_order): web này KHÔNG tự cấp quyền / làm mới,
 // chỉ ĐỌC access_token hiện hành từ bảng `zalo_oa_tokens` trong DB của worker Go
@@ -12,16 +12,27 @@ import { Pool } from "pg";
 
 const CACHE_MS = 5 * 60 * 1000; // access_token Go xoay ~25h; đọc lại tối đa 5 phút/lần (hoặc ép khi -216)
 
-export type SharedZaloToken = { oaId: string; accessToken: string; expiresAt: Date | null; updatedAt: Date | null };
-export type SharedZaloBinding = { userId: string; zaloUserId: string; status: string; linkedAt: Date | null; name: string };
+export type SharedZaloToken = {
+  oaId: string;
+  accessToken: string;
+  expiresAt: Date | null;
+  updatedAt: Date | null;
+};
+export type SharedZaloBinding = {
+  userId: string;
+  zaloUserId: string;
+  status: string;
+  linkedAt: Date | null;
+  name: string;
+};
 
 let pool: Pool | null = null;
-let poolUrl = "";
+let poolUrl = '';
 let cache: { at: number; row: SharedZaloToken | null } | null = null;
-let lastError = "";
+let lastError = '';
 
 function sourceUrl(): string {
-  return (process.env.ZALO_TOKEN_SOURCE_DB_URL || "").trim();
+  return (process.env.ZALO_TOKEN_SOURCE_DB_URL || '').trim();
 }
 
 export function isSharedZaloTokenConfigured(): boolean {
@@ -62,21 +73,30 @@ export async function readSharedZaloToken(force = false): Promise<SharedZaloToke
         ORDER BY updated_at DESC NULLS LAST
         LIMIT 1`,
     );
-    const row = r.rows[0] as { oa_id?: unknown; access_token?: unknown; expires_epoch?: number | null; updated_epoch?: number | null } | undefined;
+    const row = r.rows[0] as
+      | {
+          oa_id?: unknown;
+          access_token?: unknown;
+          expires_epoch?: number | null;
+          updated_epoch?: number | null;
+        }
+      | undefined;
     const out: SharedZaloToken | null = row?.access_token
       ? {
-          oaId: String(row.oa_id ?? ""),
+          oaId: String(row.oa_id ?? ''),
           accessToken: String(row.access_token),
           expiresAt: row.expires_epoch ? new Date(row.expires_epoch * 1000) : null,
           updatedAt: row.updated_epoch ? new Date(row.updated_epoch * 1000) : null,
         }
       : null;
     cache = { at: Date.now(), row: out };
-    lastError = out ? "" : "Bảng zalo_oa_tokens bên worker Go chưa có dòng token nào (worker Go chưa bootstrap?).";
+    lastError = out
+      ? ''
+      : 'Bảng zalo_oa_tokens bên worker Go chưa có dòng token nào (worker Go chưa bootstrap?).';
     return out;
   } catch (err) {
-    lastError = "Không đọc được DB worker Go: " + (err instanceof Error ? err.message : String(err));
-    console.error("[zaloShared]", lastError);
+    lastError = 'Không đọc được DB worker Go: ' + (err instanceof Error ? err.message : String(err));
+    console.error('[zaloShared]', lastError);
     // Lỗi mạng tạm thời -> dùng lại token cache cũ nếu còn (đỡ gãy gửi tin).
     return cache?.row ?? null;
   }
@@ -92,28 +112,41 @@ export async function listSharedZaloBindings(): Promise<SharedZaloBinding[]> {
         ORDER BY linked_at DESC
         LIMIT 50`,
     );
-    const rows = r.rows as { user_id: unknown; zalo_user_id: unknown; status: unknown; linked_epoch: number | null }[];
+    const rows = r.rows as {
+      user_id: unknown;
+      zalo_user_id: unknown;
+      status: unknown;
+      linked_epoch: number | null;
+    }[];
     const out: SharedZaloBinding[] = rows.map((b) => ({
-      userId: String(b.user_id ?? ""),
-      zaloUserId: String(b.zalo_user_id ?? ""),
-      status: String(b.status ?? ""),
+      userId: String(b.user_id ?? ''),
+      zaloUserId: String(b.zalo_user_id ?? ''),
+      status: String(b.status ?? ''),
       linkedAt: b.linked_epoch ? new Date(b.linked_epoch * 1000) : null,
-      name: "",
+      name: '',
     }));
     // Tên người dùng bên Go (bảng users) — không biết chắc schema nên thử, lỗi thì bỏ qua.
     try {
       const ids = out.map((b) => b.userId).filter(Boolean);
       if (ids.length) {
-        const u = await getPool().query(`SELECT id, username, full_name FROM users WHERE id = ANY($1::bigint[])`, [ids]);
-        const byId = new Map((u.rows as { id: unknown; username?: unknown; full_name?: unknown }[]).map((x) => [String(x.id), String(x.full_name || x.username || "")]));
-        for (const b of out) b.name = byId.get(b.userId) || "";
+        const u = await getPool().query(
+          `SELECT id, username, full_name FROM users WHERE id = ANY($1::bigint[])`,
+          [ids],
+        );
+        const byId = new Map(
+          (u.rows as { id: unknown; username?: unknown; full_name?: unknown }[]).map((x) => [
+            String(x.id),
+            String(x.full_name || x.username || ''),
+          ]),
+        );
+        for (const b of out) b.name = byId.get(b.userId) || '';
       }
     } catch {
       // schema users khác -> chỉ hiện user_id
     }
     return out;
   } catch (err) {
-    console.error("[zaloShared] đọc zalo_user_bindings lỗi:", err instanceof Error ? err.message : err);
+    console.error('[zaloShared] đọc zalo_user_bindings lỗi:', err instanceof Error ? err.message : err);
     return [];
   }
 }

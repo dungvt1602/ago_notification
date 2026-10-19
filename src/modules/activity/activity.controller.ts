@@ -1,12 +1,14 @@
 import { Controller, Get } from '@nestjs/common';
 import { handle } from '@common/http/handle';
-import { listActivity } from '@core/services/activityService';
+import { ActivityService } from './activity.service';
 
 /* Cổng từ Next: GET /api/activity. */
 @Controller('activity')
 export class ActivityController {
+  constructor(private readonly service: ActivityService) {}
+
   @Get()
   get() {
-    return handle(() => listActivity(), 500);
+    return handle(() => this.service.listActivity(), 500);
   }
 }

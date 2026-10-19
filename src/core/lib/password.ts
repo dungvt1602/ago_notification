@@ -1,4 +1,4 @@
-import bcrypt from "bcryptjs";
+import bcrypt from 'bcryptjs';
 
 // Băm mật khẩu (bcrypt).
 export function hashPassword(plain: string): Promise<string> {
@@ -7,7 +7,7 @@ export function hashPassword(plain: string): Promise<string> {
 
 // Hash bcrypt hợp lệ bắt đầu bằng $2 ($2a/$2b/$2y).
 export function isRealHash(hash: string | null | undefined): boolean {
-  return !!hash && hash.startsWith("$2");
+  return !!hash && hash.startsWith('$2');
 }
 
 // So khớp mật khẩu; hash placeholder (chưa đặt) -> false.

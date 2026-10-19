@@ -10,3 +10,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
+
+# parity harness: log/kết quả thô sinh ra khi chạy
+test/parity/logs/
+test/parity/results.json

@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 // Supabase Storage cho ảnh template (bucket public `template-images`).
 // - Path CỐ ĐỊNH theo template (template-<id>) + upsert -> thay ảnh mới là GHI ĐÈ file cũ,
@@ -6,7 +6,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // - Cần SUPABASE_SERVICE_ROLE_KEY (secret, chỉ server) để ghi/xóa. Chưa khai -> app
 //   fallback lưu bytes vào DB như cũ (không gãy).
 
-const BUCKET = "template-images";
+const BUCKET = 'template-images';
 
 let cached: SupabaseClient | null | undefined;
 function client(): SupabaseClient | null {
@@ -28,15 +28,15 @@ export function templateImagePath(templateId: bigint | number | string): string 
 
 // URL public (qua CDN Supabase, có cache) — UI gắn ?t=updatedAt làm cache-buster.
 export function publicImageUrl(path: string): string {
-  const base = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
+  const base = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/$/, '');
   return `${base}/storage/v1/object/public/${BUCKET}/${path}`;
 }
 
 export async function uploadImageToStorage(path: string, bytes: ArrayBuffer, mime: string): Promise<void> {
   const sb = client();
-  if (!sb) throw new Error("Storage chưa cấu hình (SUPABASE_SERVICE_ROLE_KEY).");
+  if (!sb) throw new Error('Storage chưa cấu hình (SUPABASE_SERVICE_ROLE_KEY).');
   const { error } = await sb.storage.from(BUCKET).upload(path, bytes, { contentType: mime, upsert: true });
-  if (error) throw new Error("Upload Storage lỗi: " + error.message);
+  if (error) throw new Error('Upload Storage lỗi: ' + error.message);
 }
 
 export async function downloadImageFromStorage(path: string): Promise<ArrayBuffer | null> {
