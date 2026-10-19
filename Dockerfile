@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Backend NestJS (Express) — 3 stage: deps -> build -> runtime.
-FROM node:22-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package*.json prisma.config.ts ./
 COPY prisma ./prisma
@@ -12,7 +12,7 @@ FROM deps AS build
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine AS runtime
+FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production PORT=4000
 RUN apk add --no-cache tini curl

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=24" },
   "description": "Backend NestJS (Express) cho hệ thống báo giá WhatsApp/Zalo — chuyển từ Next.js API routes, giữ nguyên logic.",
   "scripts": {
     "build": "nest build",
