@@ -154,7 +154,7 @@ export class ZaloController {
     if (!code) {
       back.searchParams.set('zalo', 'err');
       back.searchParams.set('msg', 'Zalo không trả về code (admin OA chưa bấm Đồng ý?)');
-      res.redirect(302, back.toString());
+      res.redirect(307, back.toString());
       return;
     }
     try {
@@ -165,7 +165,7 @@ export class ZaloController {
       back.searchParams.set('zalo', 'err');
       back.searchParams.set('msg', err instanceof Error ? err.message : String(err));
     }
-    res.redirect(302, back.toString());
+    res.redirect(307, back.toString());
   }
 
   @Get('senders')

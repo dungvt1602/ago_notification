@@ -42,7 +42,7 @@ export class SendWorkerService implements OnApplicationBootstrap, OnModuleDestro
         if (running) return;
         running = true;
         processNextBatch()
-          .catch((err) => this.log.error('[sendWorker] error:', err))
+          .catch((err) => this.log.error(`[sendWorker] error: ${err instanceof Error ? err.stack : String(err)}`))
           .finally(() => {
             running = false;
           });
@@ -64,7 +64,7 @@ export class SendWorkerService implements OnApplicationBootstrap, OnModuleDestro
           this.log.log(`[logCleanup] xóa -> activity:${a} send_jobs:${b} inbound:${c} preview_bo_do:${d}`);
         }
       } catch (err) {
-        this.log.error('[logCleanup] error:', err);
+        this.log.error(`[logCleanup] error: ${err instanceof Error ? err.stack : String(err)}`);
       } finally {
         cleaning = false;
       }

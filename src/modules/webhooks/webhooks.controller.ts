@@ -50,7 +50,7 @@ export class WebhooksController {
       res.status(200).type('text/plain').send(challenge);
       return;
     }
-    res.status(403).send('forbidden');
+    res.status(403).type('text/plain').send('forbidden');
   }
 
   // Nhận sự kiện: tin khách trả lời + trạng thái gửi. LUÔN 200 (trừ 503 để tracking gửi lại).
@@ -130,7 +130,7 @@ export class WebhooksController {
         }
       }
     } catch (err) {
-      this.logger.error('[whatsappWebhook] error:', err);
+      this.logger.error(`[whatsappWebhook] error: ${err instanceof Error ? err.stack : String(err)}`);
     }
 
     // Chuyển tiếp SAU xử lý cục bộ; lỗi mạng / hết giờ / 5xx -> 503 để Meta gửi lại.
@@ -145,7 +145,7 @@ export class WebhooksController {
   // Zalo không dùng hub.challenge; GET chỉ để kiểm tra endpoint sống.
   @Get('zalo')
   zaloPing(@Res() res: Response): void {
-    res.status(200).send('ok');
+    res.status(200).type('text/plain').send('ok');
   }
 
   @Post('zalo')
@@ -231,7 +231,7 @@ export class WebhooksController {
         }
       }
     } catch (err) {
-      this.logger.error('[zaloWebhook] error:', err);
+      this.logger.error(`[zaloWebhook] error: ${err instanceof Error ? err.stack : String(err)}`);
     }
 
     return { ok: true };
