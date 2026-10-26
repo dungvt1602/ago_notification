@@ -16,7 +16,12 @@ import { ZaloTokenService } from './zalo-token.service';
 // Lưu ý Zalo: gửi CS message cần người nhận đã tương tác với OA trong cửa sổ cho phép,
 // và user_id là id theo OA (KHÔNG phải số điện thoại). Cần quyền "Gửi tin nhắn text" đã duyệt.
 
-const ZALO_CS_ENDPOINT = 'https://openapi.zalo.me/v3.0/oa/message/cs';
+// Gốc API Zalo đọc lúc gọi (không chốt khi nạp module) để test trỏ sang Zalo GIẢ qua ZALO_API_BASE.
+// Không đặt biến -> đúng https://openapi.zalo.me như trước.
+const DEFAULT_ZALO_API_BASE = 'https://openapi.zalo.me';
+function zaloApiBase(): string {
+  return (process.env.ZALO_API_BASE || '').trim().replace(/\/+$/, '') || DEFAULT_ZALO_API_BASE;
+}
 const ERR_TOKEN_INVALID = -216;
 const UID_CACHE_MS = 24 * 60 * 60 * 1000;
 
@@ -118,15 +123,20 @@ export class ZaloClient {
     }
   }
 
-  private async postCs(
+  private postCs(token: string, userId: string, text: string): Promise<{ resp: ZaloApiResp; out: boolean }> {
+    return this.postCsMessage(token, userId, { text });
+  }
+
+  // Gửi 1 message bất kỳ (text / template) qua endpoint tin tư vấn.
+  private async postCsMessage(
     token: string,
     userId: string,
-    text: string,
+    message: Record<string, unknown>,
   ): Promise<{ resp: ZaloApiResp; out: boolean }> {
-    const res = await fetchWithTimeout(ZALO_CS_ENDPOINT, {
+    const res = await fetchWithTimeout(zaloApiBase() + '/v3.0/oa/message/cs', {
       method: 'POST',
       headers: { 'content-type': 'application/json', access_token: token },
-      body: JSON.stringify({ recipient: { user_id: userId }, message: { text } }),
+      body: JSON.stringify({ recipient: { user_id: userId }, message }),
     });
     // Zalo trả error=0 khi thành công; khác 0 hoặc HTTP lỗi = thất bại.
     const resp = (await res.json().catch(() => ({}))) as ZaloApiResp;
@@ -143,7 +153,8 @@ export class ZaloClient {
     try {
       const r = await this.withZaloToken(apiKeyEnv, async (token) => {
         const url =
-          'https://openapi.zalo.me/v3.0/oa/user/detail?data=' +
+          zaloApiBase() +
+          '/v3.0/oa/user/detail?data=' +
           encodeURIComponent(JSON.stringify({ user_id: phone }));
         const res = await fetchWithTimeout(url, { headers: { access_token: token } });
         const resp = (await res.json().catch(() => ({}))) as ZaloApiResp;
@@ -198,6 +209,39 @@ export class ZaloClient {
     }
   }
 
+  // Gửi tin RFQ (đã dựng bởi buildRfqMessage) tới 1 user_id. KHÔNG ném lỗi: trả { ok, error?, resp, messageId? }.
+  // `resp` là JSON thô của Zalo để nút "Nhắn thử" hiển thị chẩn đoán. Token/-216 xử lý như các tin khác.
+  async sendRfqMessage(
+    zaloUserId: string,
+    message: Record<string, unknown>,
+    apiKeyEnv?: string | null,
+  ): Promise<{ ok: boolean; error?: string; resp?: unknown; messageId?: string }> {
+    try {
+      const r = await this.withZaloToken(apiKeyEnv, (t) => this.postCsMessage(t, zaloUserId, message));
+      if (!r) return { ok: false, error: 'Chưa có token Zalo OA — hãy kết nối Zalo OA.' };
+      if (!r.out) {
+        const code = r.resp?.error;
+        const hint =
+          code === -201 || code === -232
+            ? ' — user_id không tồn tại hoặc người này chưa Quan tâm / chưa nhắn OA.'
+            : code === -213 || code === -214
+              ? ' — app chưa được duyệt quyền gửi tin hoặc người nhận chưa tương tác OA (cửa sổ 48h).'
+              : '';
+        this.logger.warn(`[zalo] gửi RFQ thất bại tới ${zaloUserId} : ${JSON.stringify(r.resp)}`);
+        return {
+          ok: false,
+          resp: r.resp,
+          error: (r.resp?.message ? `${r.resp.message} (error ${code})` : 'Zalo từ chối tin') + hint,
+        };
+      }
+      const mid = r.resp?.data?.message_id;
+      return { ok: true, resp: r.resp, messageId: mid == null ? undefined : String(mid) };
+    } catch (err) {
+      this.logger.error(`[zalo] lỗi mạng khi gửi RFQ: ${err instanceof Error ? err.message : err}`);
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   // Gửi 1 đoạn text tới từng người nhận trong ZALO_BOSS_USER_ID. KHÔNG BAO GIỜ ném lỗi.
   async sendZaloText(text: string): Promise<ZaloResult> {
     const to = recipients();
@@ -237,7 +281,8 @@ export class ZaloClient {
     try {
       const r = await this.withZaloToken(apiKeyEnv, async (token) => {
         const url =
-          'https://openapi.zalo.me/v3.0/oa/user/detail?data=' +
+          zaloApiBase() +
+          '/v3.0/oa/user/detail?data=' +
           encodeURIComponent(JSON.stringify({ user_id: userId }));
         const res = await fetchWithTimeout(url, { headers: { access_token: token } });
         const resp = (await res.json().catch(() => ({}))) as ZaloApiResp;

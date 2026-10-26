@@ -41,6 +41,24 @@ async function bootstrap() {
   app.use(/^\/api\/templates\/[^/]+\/image$/, (req: Request, res: Response, next: NextFunction) =>
     req.method === 'POST' ? raw({ type: () => true, limit: '50mb' })(req, res, next) : next(),
   );
+  // Ảnh RFQ cũng gửi thô (mọi content-type; controller tự nhận diện định dạng và báo "Ảnh quá lớn" nếu >5MB).
+  app.use(/^\/api\/supplier-rfqs\/[^/]+\/image$/, (req: Request, res: Response, next: NextFunction) =>
+    req.method === 'POST' ? raw({ type: () => true, limit: '6mb' })(req, res, next) : next(),
+  );
+  // Route CÔNG KHAI (không đăng nhập): body JSON tối đa 64kb, đặt TRƯỚC parser 50mb toàn cục để kẻ lạ không bắt
+  // server nuốt 50MB/lượt. Quá cỡ -> JSON { error } (không tới controller).
+  app.use(
+    '/api/public',
+    text({ type: () => true, limit: '64kb' }),
+    parseJsonText,
+    (err: { status?: number; type?: string }, _req: Request, res: Response, next: NextFunction) => {
+      if (!err) return next();
+      const tooBig = err.type === 'entity.too.large';
+      res
+        .status(tooBig ? 413 : (err.status ?? 400))
+        .json({ error: tooBig ? 'Dữ liệu gửi lên quá lớn.' : 'Dữ liệu không hợp lệ' });
+    },
+  );
   // Các route còn lại: đọc chuỗi thô ở mọi content-type rồi parse JSON (lỗi -> req.jsonError, xem json-body.ts).
   // Import khách hàng gửi hàng chục nghìn dòng nên limit 50mb.
   app.use(text({ type: () => true, limit: '50mb' }), parseJsonText);

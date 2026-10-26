@@ -552,3 +552,139 @@ model ProcessedEvent {
   @@index([correlationId], map: "idx_processed_events_correlation")
   @@map("processed_events")
 }
+
+// ============================================================
+// BÁO GIÁ NHÀ CUNG CẤP (RFQ) QUA ZALO — PLAN-0001
+// SQL idempotent tương ứng: prisma/migrations-manual/2026-10-27-supplier-rfq.sql
+// ============================================================
+
+// Nhà cung cấp (NCC). zalo_user_id = user_id theo OA (KHÔNG phải SĐT) — thiếu thì không gửi được RFQ.
+model Supplier {
+  id         BigInt   @id @default(autoincrement())
+  name       String   @db.VarChar(255)
+  company    String?  @db.VarChar(255)
+  phone      String?  @db.VarChar(30)
+  email      String?  @db.VarChar(255)
+  zaloUserId String?  @map("zalo_user_id") @db.VarChar(50)
+  note       String?  @db.Text
+  status     String   @default("ACTIVE") @db.VarChar(20)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  invitations SupplierRfqInvitation[]
+
+  @@index([name])
+  @@map("suppliers")
+}
+
+// Yêu cầu báo giá. status: DRAFT | SENT | CLOSED. code dạng RFQ-YYYY-NNNN (đánh số theo năm).
+model SupplierRfq {
+  id        BigInt    @id @default(autoincrement())
+  code      String    @unique @db.VarChar(30)
+  title     String    @db.VarChar(255)
+  note      String?   @db.Text
+  currency  String    @default("VND") @db.VarChar(8)
+  deadline  DateTime? @db.Timestamptz(6)
+  status    String    @default("DRAFT") @db.VarChar(20)
+  createdBy BigInt?   @map("created_by") // id người tạo (không FK: xoá user không được làm mất RFQ)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  items       SupplierRfqItem[]
+  image       SupplierRfqImage?
+  invitations SupplierRfqInvitation[]
+
+  @@index([status, createdAt])
+  @@map("supplier_rfqs")
+}
+
+model SupplierRfqItem {
+  id       BigInt   @id @default(autoincrement())
+  rfqId    BigInt   @map("rfq_id")
+  no       Int
+  product  String   @db.VarChar(255)
+  spec     String?  @db.VarChar(500)
+  unit     String?  @db.VarChar(50)
+  quantity Decimal? @db.Decimal(18, 4)
+  note     String?  @db.Text
+
+  rfq        SupplierRfq         @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  quoteItems SupplierQuoteItem[]
+
+  @@unique([rfqId, no])
+  @@map("supplier_rfq_items")
+}
+
+// Ảnh minh hoạ của RFQ lưu thẳng trong DB (1 RFQ 1 ảnh) để Zalo tải qua GET công khai.
+model SupplierRfqImage {
+  rfqId     BigInt   @id @map("rfq_id")
+  mime      String   @db.VarChar(100)
+  data      Bytes
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  rfq SupplierRfq @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+
+  @@map("supplier_rfq_images")
+}
+
+// Lời mời = 1 NCC được gửi 1 RFQ (token riêng). supplier_id NULL = lời mời THỬ (is_test) gửi cho nhân viên
+// nội bộ; Postgres coi NULL là khác nhau nên unique (rfq_id, supplier_id) không chặn nhiều lời mời thử.
+// Chỉ lưu SHA-256 của token. status: PENDING | SENT | VIEWED | SUBMITTED | EXPIRED | FAILED.
+model SupplierRfqInvitation {
+  id          BigInt    @id @default(autoincrement())
+  rfqId       BigInt    @map("rfq_id")
+  supplierId  BigInt?   @map("supplier_id")
+  tokenHash   String    @unique @map("token_hash") @db.VarChar(64)
+  isTest      Boolean   @default(false) @map("is_test")
+  status      String    @default("PENDING") @db.VarChar(20)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  sentAt      DateTime? @map("sent_at") @db.Timestamptz(6)
+  viewedAt    DateTime? @map("viewed_at") @db.Timestamptz(6)
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
+  channel     String    @default("ZALO") @db.VarChar(20)
+  messageId   String?   @map("message_id") @db.VarChar(100)
+  error       String?   @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rfq      SupplierRfq     @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier Supplier?       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  quotes   SupplierQuote[]
+
+  @@unique([rfqId, supplierId])
+  @@index([supplierId])
+  @@map("supplier_rfq_invitations")
+}
+
+// Mỗi lần NCC nộp giá = 1 phiên bản mới (version tăng dần), không ghi đè bản cũ.
+model SupplierQuote {
+  id           BigInt    @id @default(autoincrement())
+  invitationId BigInt    @map("invitation_id")
+  version      Int
+  currency     String    @db.VarChar(8)
+  validUntil   DateTime? @map("valid_until") @db.Date
+  note         String?   @db.Text
+  submittedAt  DateTime  @default(now()) @map("submitted_at") @db.Timestamptz(6)
+
+  invitation SupplierRfqInvitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  items      SupplierQuoteItem[]
+
+  @@unique([invitationId, version])
+  @@map("supplier_quotes")
+}
+
+model SupplierQuoteItem {
+  id           BigInt   @id @default(autoincrement())
+  quoteId      BigInt   @map("quote_id")
+  rfqItemId    BigInt   @map("rfq_item_id")
+  unitPrice    Decimal  @map("unit_price") @db.Decimal(18, 4)
+  moq          Decimal? @db.Decimal(18, 4)
+  leadTimeDays Int?     @map("lead_time_days")
+  note         String?  @db.Text
+
+  quote   SupplierQuote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  rfqItem SupplierRfqItem @relation(fields: [rfqItemId], references: [id], onDelete: Cascade)
+
+  @@unique([quoteId, rfqItemId])
+  @@index([rfqItemId])
+  @@map("supplier_quote_items")
+}

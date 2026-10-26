@@ -13,6 +13,8 @@ import { NotificationModule } from './modules/notification/notification.module';
 import { QuotationsModule } from './modules/quotations/quotations.module';
 import { ReceiveChannelsModule } from './modules/receive-channels/receive-channels.module';
 import { SendModule } from './modules/send/send.module';
+import { SupplierRfqModule } from './modules/supplier-rfq/supplier-rfq.module';
+import { SuppliersModule } from './modules/suppliers/suppliers.module';
 import { TemplatesModule } from './modules/templates/templates.module';
 import { UsersModule } from './modules/users/users.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
@@ -44,6 +46,8 @@ import { ZaloModule } from './modules/zalo/zalo.module';
     WebhooksModule,
     ZaloModule,
     WorkerModule,
+    SuppliersModule,
+    SupplierRfqModule,
   ],
 })
 export class AppModule {}

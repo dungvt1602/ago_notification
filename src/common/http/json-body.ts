@@ -6,7 +6,7 @@ import type { Request } from 'express';
  * - @JsonBody(): như `await req.json()` — body rỗng/hỏng => 400 { error: <thông điệp SyntaxError> }.
  * - @LenientJsonBody(): như `await req.json().catch(() => ({}))` — body rỗng/hỏng => {}.
  */
-type JsonReq = Request & { jsonError?: Error };
+type JsonReq = Request & { jsonError?: Error; jsonParsed?: boolean };
 
 export const JsonBody = createParamDecorator((_data: unknown, ctx: ExecutionContext): unknown => {
   const req = ctx.switchToHttp().getRequest<JsonReq>();
@@ -21,6 +21,9 @@ export const LenientJsonBody = createParamDecorator((_data: unknown, ctx: Execut
 
 /* Middleware: biến chuỗi thô thành JSON; lỗi (rỗng/hỏng) ghi vào req.jsonError để decorator quyết định. */
 export function parseJsonText(req: JsonReq, _res: unknown, next: (err?: unknown) => void): void {
+  // Đã parse ở một middleware đứng trước (vd. /api/public giới hạn 64kb) thì không parse lại.
+  if (req.jsonParsed) return next();
+  req.jsonParsed = true;
   if (typeof req.body === 'string') {
     try {
       req.body = JSON.parse(req.body) as unknown;

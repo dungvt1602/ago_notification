@@ -2,7 +2,16 @@
 // Dùng chung client (màn Nhật ký) và server (ghi nhật ký). KHÔNG import server-only ở đây.
 
 export type ActionGroup =
-  'auth' | 'customer' | 'template' | 'quotation' | 'send' | 'user' | 'channel' | 'zalo' | 'system';
+  | 'auth'
+  | 'customer'
+  | 'template'
+  | 'quotation'
+  | 'send'
+  | 'user'
+  | 'channel'
+  | 'zalo'
+  | 'supplier'
+  | 'system';
 
 export const ACTION_LABELS: Record<string, { label: string; group: ActionGroup }> = {
   DANG_NHAP: { label: 'Đăng nhập', group: 'auth' },
@@ -44,6 +53,19 @@ export const ACTION_LABELS: Record<string, { label: string; group: ActionGroup }
   KENH_NHAN_SUA: { label: 'Sửa kênh nhận', group: 'channel' },
   KENH_NHAN_XOA: { label: 'Xóa kênh nhận', group: 'channel' },
 
+  NCC_TAO: { label: 'Thêm nhà cung cấp', group: 'supplier' },
+  NCC_SUA: { label: 'Sửa nhà cung cấp', group: 'supplier' },
+  NCC_XOA: { label: 'Xóa nhà cung cấp', group: 'supplier' },
+  NCC_NOP_GIA: { label: 'Nhà cung cấp nộp giá', group: 'supplier' },
+  RFQ_TAO: { label: 'Tạo yêu cầu báo giá NCC', group: 'supplier' },
+  RFQ_SUA: { label: 'Sửa yêu cầu báo giá NCC', group: 'supplier' },
+  RFQ_XOA: { label: 'Xóa yêu cầu báo giá NCC', group: 'supplier' },
+  RFQ_DOI_ANH: { label: 'Đổi ảnh yêu cầu báo giá NCC', group: 'supplier' },
+  RFQ_XOA_ANH: { label: 'Xóa ảnh yêu cầu báo giá NCC', group: 'supplier' },
+  RFQ_GUI: { label: 'Gửi yêu cầu báo giá cho NCC', group: 'supplier' },
+  RFQ_DONG: { label: 'Đóng yêu cầu báo giá NCC', group: 'supplier' },
+  RFQ_NHAN_THU: { label: 'Nhắn thử yêu cầu báo giá NCC', group: 'supplier' },
+
   ZALO_KET_NOI: { label: 'Kết nối Zalo OA', group: 'zalo' },
   ZALO_NGAT_KET_NOI: { label: 'Ngắt kết nối Zalo OA', group: 'zalo' },
   ZALO_LAM_MOI_TOKEN: { label: 'Gia hạn token Zalo', group: 'zalo' },
@@ -63,6 +85,7 @@ export const GROUP_LABELS: Record<ActionGroup, string> = {
   user: 'Người dùng',
   channel: 'Kênh gửi / nhận',
   zalo: 'Zalo',
+  supplier: 'Nhà cung cấp',
   system: 'Hệ thống',
 };
 

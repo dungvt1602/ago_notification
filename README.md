@@ -21,7 +21,7 @@ src/
 prisma/              schema.prisma, schema.sql, seed.ts
 docs/                tài liệu (xem docs/01, docs/06)
 ```
-Module: activity, auth, channels, cron, customers, dashboard, health, inbound (+auto-reply), notification, quotations, receive-channels, send (+quota, send-job), templates (+meta-sync), users, webhooks, worker, zalo (+token, link, sender, client).
+Module: activity, auth, channels, cron, customers, dashboard, health, inbound (+auto-reply), notification, quotations, receive-channels, send (+quota, send-job), supplier-rfq (báo giá NCC qua Zalo, + route công khai theo token), suppliers, templates (+meta-sync), users, webhooks, worker, zalo (+token, link, sender, client). Test tích hợp RFQ: `npm run test:rfq` (Docker).
 
 ## Chạy
 ```bash

@@ -1,0 +1,318 @@
+import { Injectable } from '@nestjs/common';
+import type { Request } from 'express';
+import { Prisma } from '@prisma/client';
+import { webReq } from '@common/http/web-request';
+import { parseId } from '@common/http/parse-id';
+import { AuditService } from '@common/audit/audit.service';
+import { dryRunMessageId, isDryRun } from '@core/lib/sendMode';
+import { sendRfqSchema, testSendSchema } from '@core/validation/supplierRfq.schema';
+import { ZaloClient } from '../zalo/zalo.client';
+import { httpError, MSG, rfqBaseUrl } from './rfq-errors';
+import { generateToken, hashToken, invitationExpiry } from './rfq-token';
+import { SupplierRfqRepository } from './supplier-rfq.repository';
+import { buildRfqMessage, type RfqMessageInput, type RfqMessageMode } from './zalo-rfq-message';
+
+type Rfq = NonNullable<Awaited<ReturnType<SupplierRfqRepository['findWithItems']>>>;
+type Supplier = Awaited<ReturnType<SupplierRfqRepository['findSuppliersByIds']>>[number];
+
+export type DeliverResult = {
+  ok: boolean;
+  mode: RfqMessageMode;
+  error?: string;
+  zalo?: unknown;
+  messageId?: string;
+  listError?: string;
+};
+
+export type SendResult = {
+  supplierId: string;
+  supplierName: string;
+  ok: boolean;
+  status: string;
+  error?: string;
+  invitationId?: string;
+};
+
+// Lời mời đã tới tay NCC (hoặc NCC đã xem/nộp) — gửi lại cần cờ resend.
+const DELIVERED = new Set(['SENT', 'VIEWED', 'SUBMITTED']);
+
+// Nhắn thử: tối đa 20 lượt / giờ / RFQ để API không bị dùng làm máy phát tin Zalo.
+const TEST_MAX_PER_HOUR = 20;
+
+// Không bao giờ trả thông điệp Prisma thô (lộ tên bảng/cột/câu truy vấn) ra kết quả gửi.
+function friendlyError(err: unknown): string {
+  if (
+    err instanceof Prisma.PrismaClientKnownRequestError ||
+    err instanceof Prisma.PrismaClientValidationError ||
+    err instanceof Prisma.PrismaClientUnknownRequestError ||
+    err instanceof Prisma.PrismaClientInitializationError ||
+    err instanceof Prisma.PrismaClientRustPanicError
+  ) {
+    return MSG.internal;
+  }
+  const m = err instanceof Error ? err.message : String(err);
+  return /prisma|invocation/i.test(m) ? MSG.internal : m;
+}
+
+@Injectable()
+export class SupplierRfqSendService {
+  // Chặn bấm đúp: mỗi (rfq, NCC) chỉ một lượt gửi chạy cùng lúc -> không sinh hai token / hai tin.
+  private readonly inFlight = new Set<string>();
+
+  constructor(
+    private readonly repo: SupplierRfqRepository,
+    private readonly zalo: ZaloClient,
+    private readonly audit: AuditService,
+  ) {}
+
+  /*
+   * Gửi tin RFQ tới 1 user_id: thử 'list' (ảnh + nút), Zalo từ chối thì lùi về 'text'. Cả hai lỗi -> trả lỗi của
+   * cả hai để người dùng thấy lý do thật. Không bao giờ ném lỗi.
+   */
+  async deliver(zaloUserId: string, input: RfqMessageInput): Promise<DeliverResult> {
+    const list = await this.zalo.sendRfqMessage(zaloUserId, buildRfqMessage('list', input));
+    if (list.ok) return { ok: true, mode: 'list', zalo: list.resp, messageId: list.messageId };
+    const text = await this.zalo.sendRfqMessage(zaloUserId, buildRfqMessage('text', input));
+    if (text.ok) {
+      return { ok: true, mode: 'text', zalo: text.resp, messageId: text.messageId, listError: list.error };
+    }
+    return {
+      ok: false,
+      mode: 'text',
+      zalo: text.resp ?? list.resp,
+      error: `Dạng list: ${list.error ?? 'lỗi'}; dạng text: ${text.error ?? 'lỗi'}`,
+    };
+  }
+
+  private messageInput(rfq: Rfq, link: string, baseUrl: string): RfqMessageInput {
+    return {
+      code: rfq.code,
+      title: rfq.title,
+      deadline: rfq.deadline,
+      note: rfq.note,
+      itemCount: rfq.items.length,
+      link,
+      imageUrl: rfq.image ? `${baseUrl}/api/supplier-rfqs/${rfq.id}/image` : null,
+    };
+  }
+
+  async send(req: Request, idRaw: string, body: unknown) {
+    const id = parseId(idRaw, 'Id yêu cầu báo giá');
+    const input = sendRfqSchema.parse(body);
+    const rfq = await this.repo.findWithItems(id);
+    if (!rfq) throw httpError(404, MSG.rfqNotFound);
+    if (rfq.status === 'CLOSED') throw new Error(MSG.rfqClosed);
+    if (rfq.items.length === 0) throw new Error('Yêu cầu báo giá chưa có mặt hàng nào.');
+    if (rfq.deadline && rfq.deadline.getTime() < Date.now()) throw new Error(MSG.pastDeadline);
+
+    const baseUrl = rfqBaseUrl();
+    const ids = [...new Set(input.supplierIds)];
+    const suppliers = new Map(
+      (await this.repo.findSuppliersByIds(ids.map((s) => BigInt(s)))).map((s) => [s.id.toString(), s]),
+    );
+    const results: SendResult[] = [];
+    // Tuần tự: Zalo giới hạn tần suất và mỗi NCC cần ghi trạng thái riêng, lỗi một NCC không dừng cả lượt.
+    for (const sid of ids) {
+      const supplier = suppliers.get(sid);
+      if (!supplier) {
+        results.push({
+          supplierId: sid,
+          supplierName: '',
+          ok: false,
+          status: 'FAILED',
+          error: 'Không tìm thấy nhà cung cấp.',
+        });
+        continue;
+      }
+      const key = `${rfq.id}:${supplier.id}`;
+      if (this.inFlight.has(key)) {
+        results.push({
+          ...{ supplierId: sid, supplierName: supplier.name },
+          ok: false,
+          status: 'PENDING',
+          error: MSG.inFlight,
+        });
+        continue;
+      }
+      this.inFlight.add(key);
+      try {
+        results.push(await this.sendOne(rfq, supplier, baseUrl, !!input.resend));
+      } catch (err) {
+        results.push({
+          supplierId: sid,
+          supplierName: supplier.name,
+          ok: false,
+          status: 'FAILED',
+          error: friendlyError(err),
+        });
+      } finally {
+        this.inFlight.delete(key);
+      }
+    }
+
+    // Skip "đã gửi trước đó" không phải lần gửi mới; chỉ lần gửi thành công thật mới đẩy DRAFT -> SENT.
+    if (results.some((r) => r.ok && r.error !== MSG.alreadySent)) await this.repo.markSentIfDraft(id);
+    const okCount = results.filter((r) => r.ok && r.error !== MSG.alreadySent).length;
+    await this.audit.audit(webReq(req), {
+      action: 'RFQ_GUI',
+      target: `${rfq.code} · ${rfq.title}`,
+      note: `${okCount}/${results.length} NCC${isDryRun() ? ' (gửi giả)' : ''}`,
+      result: okCount === 0 && results.length > 0 && results.every((r) => !r.ok) ? 'FAILED' : 'SUCCESS',
+    });
+    return { results };
+  }
+
+  private async sendOne(rfq: Rfq, supplier: Supplier, baseUrl: string, resend: boolean): Promise<SendResult> {
+    const base = { supplierId: supplier.id.toString(), supplierName: supplier.name };
+    const existing = await this.repo.findInvitation(rfq.id, supplier.id);
+
+    if (existing && DELIVERED.has(existing.status) && !resend) {
+      return {
+        ...base,
+        ok: true,
+        status: existing.status,
+        error: MSG.alreadySent,
+        invitationId: existing.id.toString(),
+      };
+    }
+    if (supplier.status !== 'ACTIVE') {
+      return {
+        ...base,
+        ok: false,
+        status: existing?.status ?? 'FAILED',
+        error: MSG.inactive,
+        invitationId: existing?.id.toString(),
+      };
+    }
+    if (!supplier.zaloUserId) {
+      return {
+        ...base,
+        ok: false,
+        status: existing?.status ?? 'FAILED',
+        error: MSG.noZaloUserId,
+        invitationId: existing?.id.toString(),
+      };
+    }
+
+    const now = new Date();
+    // Token lưu chỉ dạng băm nên không dựng lại được link cũ: mỗi lần gửi sinh token MỚI.
+    const token = generateToken();
+    const newHash = hashToken(token);
+    const link = `${baseUrl}/ncc/${token}`;
+    const expiresAt = invitationExpiry(rfq.deadline, now);
+    let inv = existing;
+    if (!inv) {
+      try {
+        inv = await this.repo.createInvitation({
+          rfqId: rfq.id,
+          supplierId: supplier.id,
+          tokenHash: newHash,
+          isTest: false,
+          status: 'PENDING',
+          expiresAt,
+          channel: 'ZALO',
+        });
+      } catch (err) {
+        // Ai đó vừa tạo lời mời (instance khác / đua) -> đọc lại thay vì báo lỗi unique.
+        if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
+        inv = await this.repo.findInvitation(rfq.id, supplier.id);
+        if (!inv) throw err;
+        return {
+          ...base,
+          ok: true,
+          status: inv.status,
+          error: MSG.alreadySent,
+          invitationId: inv.id.toString(),
+        };
+      }
+    } else {
+      // Lưu hash MỚI trước khi gọi Zalo: tin đã tới tay NCC thì link trong tin chắc chắn dùng được
+      // (không có khoảng "đã gửi nhưng DB còn hash cũ"). Gửi lỗi thì trả hash/hạn cũ để link cũ vẫn sống.
+      await this.repo.updateInvitation(inv.id, { tokenHash: newHash, expiresAt });
+    }
+
+    let res: { ok: boolean; messageId?: string; error?: string };
+    try {
+      if (isDryRun()) {
+        // Gửi giả: không gọi mạng, chỉ đánh dấu DRYRUN- để tra log biết tin không có thật.
+        res = { ok: true, messageId: dryRunMessageId() };
+      } else {
+        res = await this.deliver(supplier.zaloUserId, this.messageInput(rfq, link, baseUrl));
+      }
+    } catch (err) {
+      res = { ok: false, error: friendlyError(err) };
+    }
+
+    if (res.ok) {
+      const keep = existing && (existing.status === 'VIEWED' || existing.status === 'SUBMITTED');
+      const status = keep ? existing.status : 'SENT';
+      await this.repo.updateInvitation(inv.id, {
+        status,
+        sentAt: now,
+        messageId: res.messageId ?? null,
+        error: null,
+      });
+      return { ...base, ok: true, status, invitationId: inv.id.toString() };
+    }
+    // Gửi lại bị lỗi: khôi phục hash/hạn cũ và giữ trạng thái "đã nhận/đã nộp" của lần trước.
+    const status = existing && DELIVERED.has(existing.status) ? existing.status : 'FAILED';
+    await this.repo.updateInvitation(inv.id, {
+      status,
+      error: res.error ?? 'Gửi lỗi',
+      ...(existing ? { tokenHash: existing.tokenHash, expiresAt: existing.expiresAt } : {}),
+    });
+    return { ...base, ok: false, status, error: res.error ?? 'Gửi lỗi', invitationId: inv.id.toString() };
+  }
+
+  /*
+   * "Nhắn thử": gửi ĐÚNG tin đó tới 1 user_id nội bộ, luôn gọi Zalo thật (kể cả khi SEND_DRY_RUN) vì là thao tác
+   * chủ động và chỉ tới người được chỉ định. Tạo lời mời is_test (không NCC, không vào so sánh) để link thử mở được.
+   */
+  async testSend(req: Request, idRaw: string, body: unknown) {
+    const id = parseId(idRaw, 'Id yêu cầu báo giá');
+    const input = testSendSchema.parse(body);
+    const rfq = await this.repo.findWithItems(id);
+    if (!rfq) throw httpError(404, MSG.rfqNotFound);
+
+    const baseUrl = rfqBaseUrl();
+    if (
+      (await this.repo.countTestInvitationsSince(rfq.id, new Date(Date.now() - 3600_000))) >=
+      TEST_MAX_PER_HOUR
+    ) {
+      throw httpError(429, MSG.tooManyTests);
+    }
+    const now = new Date();
+    const token = generateToken();
+    const link = `${baseUrl}/ncc/${token}`;
+    const inv = await this.repo.createInvitation({
+      rfqId: rfq.id,
+      supplierId: null,
+      tokenHash: hashToken(token),
+      isTest: true,
+      status: 'PENDING',
+      expiresAt: invitationExpiry(rfq.deadline, now),
+      channel: 'ZALO',
+    });
+    const res = await this.deliver(input.zaloUserId, this.messageInput(rfq, link, baseUrl));
+    await this.repo.updateInvitation(
+      inv.id,
+      res.ok
+        ? { status: 'SENT', sentAt: now, messageId: res.messageId ?? null }
+        : { status: 'FAILED', error: res.error ?? 'Gửi lỗi' },
+    );
+    await this.audit.audit(webReq(req), {
+      action: 'RFQ_NHAN_THU',
+      target: `${rfq.code} · ${rfq.title}`,
+      note: res.ok ? `dạng ${res.mode}` : (res.error ?? 'lỗi'),
+      result: res.ok ? 'SUCCESS' : 'FAILED',
+    });
+    return {
+      ok: res.ok,
+      mode: res.mode,
+      link,
+      ...(res.error ? { error: res.error } : {}),
+      ...(res.zalo !== undefined ? { zalo: res.zalo } : {}),
+      ...(res.listError ? { listError: res.listError } : {}),
+    };
+  }
+}

@@ -23,3 +23,11 @@ Worker cùng tiến trình API: poll `processNextBatch` (mặc định 8s), dọ
 
 ## Chưa có (giữ như bản gốc)
 Không xác thực phía server — danh tính chỉ là header `x-actor-id`/`x-actor-name` do FE gắn (dùng cho nhật ký). Nên đặt BE sau proxy cùng origin hoặc thêm auth ở bước sau.
+
+## Báo giá nhà cung cấp (RFQ) qua Zalo — PLAN-0001
+Hai module mới, KHÔNG thuộc phần port từ Next (tính năng gốc của BE):
+- `suppliers` — CRUD nhà cung cấp (`/api/suppliers`).
+- `supplier-rfq` — RFQ + mặt hàng + ảnh + gửi/đóng/so sánh/nhắn thử (`/api/supplier-rfqs`) và route CÔNG KHAI theo token (`/api/public/supplier-rfq/:token`, giới hạn tần suất trong bộ nhớ, `rate-limiter.ts`). Tách: `supplier-rfq.service` (CRUD/ảnh/so sánh), `supplier-rfq-send.service` (gửi + nhắn thử, lùi list→text), `supplier-rfq-public.service` (xem/nộp giá), file thuần `rfq-token.ts`, `rfq-compare.ts`, `zalo-rfq-message.ts` (builder payload Zalo — MỘT chỗ duy nhất).
+- Gọi Zalo qua `ZaloClient.sendRfqMessage` (dùng chung token/-216 retry); gốc API đọc từ `ZALO_API_BASE` (mặc định `https://openapi.zalo.me`) để test dùng Zalo giả.
+- Nộp giá ghi `quotes` + `outbox_events` (`supplier_quote.submitted`) CÙNG transaction. Cần chạy `prisma/migrations-manual/2026-10-19-outbox-events.sql` và `2026-10-27-supplier-rfq.sql` trước khi bật.
+- Test tích hợp: `npm run test:rfq` (Postgres Docker tạm 127.0.0.1:55434 + Zalo giả :55435, không chạm dịch vụ thật).
