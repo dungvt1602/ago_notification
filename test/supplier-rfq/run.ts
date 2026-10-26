@@ -85,11 +85,19 @@ type ZaloCall = {
   path: string;
   token: string | undefined;
   userId: string;
-  kind: 'list' | 'text';
+  kind: 'buttons' | 'text';
   body: unknown;
 };
 const zaloCalls: ZaloCall[] = [];
-let failFirstList = true; // lần gọi 'list' đầu tiên bị từ chối để thử đường lùi sang text
+let buttonsFailCode: number | null = -1; // tin có nút kế tiếp bị từ chối bằng mã này (1 lần) -> thử đường lùi/không lùi
+const ZALO_MESSAGES: Record<number, string> = {
+  [-1]: 'Invalid button url (fake)',
+  [-230]: 'User has not interacted with the OA in the past 7 days (fake)',
+};
+// Tin ảnh riêng không tính vào zaloCalls (để các phép đếm tin báo giá giữ nguyên) mà ghi ở đây.
+const imageCalls: ZaloCall[] = [];
+const failImageUsers = new Set<string>();
+const callOrder: Array<{ kind: string; userId: string }> = [];
 // Tra SĐT -> user_id (GET /v3.0/oa/user/detail): chỉ SĐT này (đã chuẩn hoá 84...) được Zalo giả nhận ra.
 const KNOWN_PHONE = '84900000001';
 const RESOLVED_ID = '777777777777777777';
@@ -119,21 +127,27 @@ function startFakeZalo(): Promise<void> {
           recipient: { user_id: string };
           message: Record<string, unknown>;
         };
-        const kind = 'attachment' in body.message ? 'list' : 'text';
+        const att = body.message.attachment as { payload?: { template_type?: string } } | undefined;
+        const isImage = att?.payload?.template_type === 'media';
+        const kind = isImage ? 'image' : att ? 'buttons' : 'text';
         const userId = body.recipient.user_id;
+        callOrder.push({ kind, userId });
         if (delayUsers.has(userId)) delayMs = 400;
-        zaloCalls.push({
+        (isImage ? imageCalls : zaloCalls).push({
           path: req.url,
           token: req.headers['access_token'] as string | undefined,
           userId,
-          kind,
+          kind: kind as 'buttons' | 'text',
           body,
         });
+        if (isImage && failImageUsers.has(userId))
+          return reply({ error: -1, message: 'Invalid media (fake)' });
         if (userId === '000') return reply({ error: -232, message: 'User has not interacted (fake)' });
         if (failUsers.has(userId)) return reply({ error: -1, message: 'Forced failure (fake)' });
-        if (kind === 'list' && failFirstList) {
-          failFirstList = false;
-          return reply({ error: -1, message: 'Invalid template format (fake)' });
+        if (kind === 'buttons' && buttonsFailCode !== null) {
+          const code = buttonsFailCode;
+          buttonsFailCode = null;
+          return reply({ error: code, message: ZALO_MESSAGES[code] ?? 'fake error' });
         }
         return reply({
           error: 0,
@@ -502,12 +516,12 @@ async function main(): Promise<void> {
   const toA = zaloCalls.filter((c) => c.userId === A.zaloUserId);
   const toB = zaloCalls.filter((c) => c.userId === B.zaloUserId);
   check(
-    toA.map((c) => c.kind).join() === 'list,text',
+    toA.map((c) => c.kind).join() === 'buttons,text',
     'Alpha: list bị từ chối rồi lùi sang text',
     toA.map((c) => c.kind),
   );
   check(
-    toB.map((c) => c.kind).join() === 'list',
+    toB.map((c) => c.kind).join() === 'buttons',
     'Beta: list một lần',
     toB.map((c) => c.kind),
   );
@@ -518,10 +532,26 @@ async function main(): Promise<void> {
   const listBody = JSON.stringify(toB[0]?.body);
   check(
     listBody.includes('"oa.open.url"') &&
-      listBody.includes('http://app.test/api/supplier-rfqs/') &&
-      listBody.includes('/image'),
-    'payload list có ảnh + default_action',
+      listBody.includes('"title":"Nhập giá"') &&
+      !listBody.includes('Bấm vào link'),
+    'tin có nút Nhập giá (không link thô trong chữ)',
     listBody,
+  );
+  const imgToB = imageCalls.filter((c) => c.userId === B.zaloUserId);
+  check(
+    imgToB.length === 1 &&
+      JSON.stringify(imgToB[0].body).includes('http://app.test/api/supplier-rfqs/' + rfqId + '/image'),
+    'tin ảnh riêng gửi trước, URL ảnh theo APP_BASE_URL',
+    imgToB.length,
+  );
+  const orderA = callOrder
+    .filter((c) => c.userId === A.zaloUserId)
+    .map((c) => c.kind)
+    .join();
+  check(
+    orderA === 'image,buttons,text',
+    'Alpha: ảnh -> nút (bị từ chối -1) -> rơi về text đúng 1 lần',
+    orderA,
   );
   const tokenB = /http:\/\/app\.test\/ncc\/([A-Za-z0-9_-]{43})/.exec(listBody)?.[1] as string;
   const textBody = (toA[1]?.body as { message: { text: string } }).message.text;
@@ -614,8 +644,12 @@ async function main(): Promise<void> {
   );
   const ts = await call('POST', `/api/supplier-rfqs/${rfqId}/test-send`, { zaloUserId: '333' });
   check(
-    ts.status === 200 && ts.json.ok === true && ts.json.mode === 'list' && ts.json.zalo?.error === 0,
-    'test-send ok (list) kèm phản hồi Zalo',
+    ts.status === 200 &&
+      ts.json.ok === true &&
+      ts.json.mode === 'buttons' &&
+      ts.json.imageSent === true &&
+      ts.json.zalo?.error === 0,
+    'test-send ok (buttons + ảnh) kèm phản hồi Zalo',
     ts.json,
   );
   const testToken = tokenOf(ts.json.link as string);
@@ -998,6 +1032,52 @@ async function main(): Promise<void> {
     ),
     'test-send bằng user_id: không có resolvedUserId',
   );
+
+  step('Tin ảnh + nút: ảnh lỗi, nút lỗi, -230');
+  failImageUsers.add('333');
+  const zi0 = zaloCalls.length;
+  const tImg = await call('POST', `/api/supplier-rfqs/${rfqId}/test-send`, { zaloUserId: '333' });
+  failImageUsers.delete('333');
+  check(
+    tImg.json.ok === true &&
+      tImg.json.mode === 'buttons' &&
+      tImg.json.imageSent === false &&
+      typeof tImg.json.imageError === 'string',
+    'ảnh bị từ chối: vẫn gửi tin báo giá, ghi imageError',
+    tImg.json,
+  );
+  check(
+    zaloCalls.length === zi0 + 1 && zaloCalls.at(-1)?.kind === 'buttons',
+    'tin có nút vẫn tới nơi dù ảnh lỗi',
+  );
+
+  buttonsFailCode = -1;
+  const zb0 = zaloCalls.length;
+  const tFall = await call('POST', `/api/supplier-rfqs/${rfqId}/test-send`, { zaloUserId: '333' });
+  check(
+    tFall.json.ok === true &&
+      tFall.json.mode === 'text' &&
+      String(tFall.json.buttonError).includes('Invalid button') &&
+      !('listError' in tFall.json),
+    'nút bị từ chối (lỗi nghiệp vụ): rơi về text, trả buttonError',
+    tFall.json,
+  );
+  check(zaloCalls.length === zb0 + 2 && zaloCalls.at(-1)?.kind === 'text', 'rơi về text đúng 1 lần');
+
+  buttonsFailCode = -230;
+  const zn0 = zaloCalls.length;
+  const t230 = await call('POST', `/api/supplier-rfqs/${rfqId}/test-send`, { zaloUserId: '333' });
+  check(
+    t230.status === 200 &&
+      t230.json.ok === false &&
+      t230.json.mode === 'buttons' &&
+      t230.json.error ===
+        'Người nhận không tương tác với OA quá 7 ngày — nhờ họ nhắn OA một tin rồi gửi lại.' &&
+      t230.json.zalo?.error === -230,
+    '-230: không rơi về text, lỗi thân thiện + zalo thô',
+    t230.json,
+  );
+  check(zaloCalls.length === zn0 + 1, '-230: chỉ 1 cuộc gọi tin (không gửi text)');
 
   // ===== Resend =====
   step('Gửi lại có resend');

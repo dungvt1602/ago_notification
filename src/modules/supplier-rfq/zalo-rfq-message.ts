@@ -1,14 +1,15 @@
 /*
  * Dựng payload tin tư vấn Zalo (POST /v3.0/oa/message/cs) cho RFQ — MỘT chỗ duy nhất, thuần (không I/O).
- * Hai chế độ:
- *  - 'list': 1 phần tử (tiêu đề + mô tả + ảnh nếu có) bấm vào mở link (default_action oa.open.url).
- *  - 'text': văn bản + link, dự phòng khi Zalo từ chối dạng list.
  *
- * CHƯA ĐỐI CHIẾU tài liệu chính thức: tên trường của template 'list' dưới đây viết theo trí nhớ. Không thêm
- * `buttons` vì chưa chắc template list nhận trường đó — chỉ dựa vào default_action. Nút "Nhắn thử" ở màn RFQ
- * tồn tại chính để kiểm chứng: nó trả nguyên phản hồi Zalo, sai khuôn thì sửa DUY NHẤT file này.
+ * Gửi tới NCC gồm tối đa 2 tin, theo thứ tự:
+ *  1) (nếu RFQ có ảnh) tin ẢNH riêng — buildRfqImageMessage. Định dạng media/image viết theo trí nhớ tài liệu
+ *     Zalo, CHƯA xác minh; tin này chỉ "cố gắng", lỗi không được chặn tin báo giá.
+ *  2) tin báo giá: 'buttons' = chữ + 1 nút "Nhập giá" mở link (định dạng ĐÃ CHẠY THẬT trên cùng OA ở hệ thống
+ *     ago-checklist-backend: message.text + attachment.template.payload.buttons[oa.open.url]);
+ *     'text' = chữ + link thô, dự phòng khi Zalo từ chối tin có nút vì lý do nghiệp vụ.
+ * Nút "Nhắn thử" ở màn RFQ hiện nguyên phản hồi Zalo để chỉnh; sai khuôn thì sửa DUY NHẤT file này.
  */
-export type RfqMessageMode = 'list' | 'text';
+export type RfqMessageMode = 'buttons' | 'text';
 
 export type RfqMessageInput = {
   code: string;
@@ -22,8 +23,8 @@ export type RfqMessageInput = {
 
 export type ZaloCsMessage = Record<string, unknown>;
 
-const TITLE_MAX = 100; // giới hạn do ta đặt thận trọng, chưa xác minh với Zalo
-const SUBTITLE_MAX = 400;
+export const BUTTON_TITLE = 'Nhập giá'; // Zalo giới hạn tiêu đề nút ~20 ký tự
+const NOTE_MAX = 300;
 
 const cut = (s: string, max: number) => (s.length > max ? s.slice(0, max - 1) + '…' : s);
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -35,28 +36,46 @@ export function formatDeadlineVN(d: Date): string {
   return `${hm} ${pad(t.getUTCDate())}/${pad(t.getUTCMonth() + 1)}/${t.getUTCFullYear()}`;
 }
 
-function subtitleOf(input: RfqMessageInput): string {
-  const parts = [`Mã ${input.code}`, `${input.itemCount} mặt hàng`];
-  if (input.deadline) parts.push(`Hạn báo giá: ${formatDeadlineVN(input.deadline)}`);
-  const head = parts.join(' · ');
+function bodyLines(input: RfqMessageInput): string[] {
+  const lines = [`Yêu cầu báo giá ${input.code}`, input.title];
+  if (input.deadline) lines.push(`Hạn báo giá: ${formatDeadlineVN(input.deadline)}`);
   const note = input.note?.trim();
-  return cut(note ? `${head}\n${note}` : head, SUBTITLE_MAX);
+  if (note) lines.push(cut(note, NOTE_MAX));
+  lines.push(`Số mặt hàng: ${input.itemCount}`);
+  return lines;
 }
 
 export function buildRfqMessage(mode: RfqMessageMode, input: RfqMessageInput): ZaloCsMessage {
   if (mode === 'text') {
-    const lines = [`Yêu cầu báo giá ${input.code}`, input.title];
-    if (input.deadline) lines.push(`Hạn báo giá: ${formatDeadlineVN(input.deadline)}`);
-    lines.push('', `Bấm vào link để nhập giá: ${input.link}`);
-    return { text: lines.join('\n') };
+    return { text: [...bodyLines(input), '', `Bấm vào link để nhập giá: ${input.link}`].join('\n') };
   }
-  const element: Record<string, unknown> = {
-    title: cut(input.title, TITLE_MAX),
-    subtitle: subtitleOf(input),
-    ...(input.imageUrl ? { image_url: input.imageUrl } : {}),
-    default_action: { type: 'oa.open.url', url: input.link },
-  };
   return {
-    attachment: { type: 'template', payload: { template_type: 'list', elements: [element] } },
+    text: bodyLines(input).join('\n'),
+    attachment: {
+      type: 'template',
+      payload: {
+        buttons: [{ title: BUTTON_TITLE, type: 'oa.open.url', payload: { url: input.link } }],
+      },
+    },
   };
+}
+
+// Tin ảnh riêng (best-effort, chưa xác minh định dạng).
+export function buildRfqImageMessage(imageUrl: string): ZaloCsMessage {
+  return {
+    attachment: {
+      type: 'template',
+      payload: { template_type: 'media', elements: [{ media_type: 'image', url: imageUrl }] },
+    },
+  };
+}
+
+/*
+ * Rơi về chữ (copy ShouldFallbackToText của ago-checklist-backend): tin có nút bị Zalo từ chối bằng lỗi NGHIỆP VỤ
+ * không thuộc nhóm người nhận / hạn mức / token thì thử lại ĐÚNG MỘT lần dạng chữ (nhiều khả năng link nút ngoài
+ * domain đã xác thực của OA). Nhóm kia thì gửi chữ cũng hỏng y hệt nên trả lỗi luôn. Lỗi mạng (không có mã) không rơi.
+ */
+const NO_FALLBACK_CODES = new Set([-230, -320, -32, -124, -216, -232, -201, -213, -214]);
+export function shouldFallbackToText(code: number | undefined): boolean {
+  return typeof code === 'number' && code !== 0 && !NO_FALLBACK_CODES.has(code);
 }

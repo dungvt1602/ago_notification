@@ -58,6 +58,29 @@ function normalizePhone(s: string): string {
   return d;
 }
 
+/*
+ * Mã lỗi Zalo -> câu tiếng Việt dễ hiểu (JSON thô vẫn được trả riêng để chẩn đoán). Mã/ý nghĩa lấy từ hệ thống
+ * ago-checklist-backend cùng OA (docs/zalo-deploy.md).
+ */
+export function zaloFriendlyError(code: number | undefined, zaloMessage?: string): string {
+  switch (code) {
+    case -230:
+      return 'Người nhận không tương tác với OA quá 7 ngày — nhờ họ nhắn OA một tin rồi gửi lại.';
+    case -320:
+      return 'App Zalo chưa nối Zalo Cloud Account nên không gửi được tin ngoài khung 48 giờ (tin tính phí).';
+    case -32:
+      return 'OA chạm hạn mức gọi API, thử lại sau 1 phút.';
+    case -201:
+    case -232:
+      return `${zaloMessage ?? 'Zalo từ chối'} (error ${code}) — user_id không tồn tại hoặc người này chưa Quan tâm / chưa nhắn OA.`;
+    case -213:
+    case -214:
+      return `${zaloMessage ?? 'Zalo từ chối'} (error ${code}) — app chưa được duyệt quyền gửi tin hoặc người nhận chưa tương tác OA (cửa sổ 48h).`;
+    default:
+      return zaloMessage ? `${zaloMessage} (error ${code})` : 'Zalo từ chối tin';
+  }
+}
+
 @Injectable()
 export class ZaloClient {
   private readonly logger = new Logger(ZaloClient.name);
@@ -215,24 +238,14 @@ export class ZaloClient {
     zaloUserId: string,
     message: Record<string, unknown>,
     apiKeyEnv?: string | null,
-  ): Promise<{ ok: boolean; error?: string; resp?: unknown; messageId?: string }> {
+  ): Promise<{ ok: boolean; error?: string; code?: number; resp?: unknown; messageId?: string }> {
     try {
       const r = await this.withZaloToken(apiKeyEnv, (t) => this.postCsMessage(t, zaloUserId, message));
       if (!r) return { ok: false, error: 'Chưa có token Zalo OA — hãy kết nối Zalo OA.' };
       if (!r.out) {
-        const code = r.resp?.error;
-        const hint =
-          code === -201 || code === -232
-            ? ' — user_id không tồn tại hoặc người này chưa Quan tâm / chưa nhắn OA.'
-            : code === -213 || code === -214
-              ? ' — app chưa được duyệt quyền gửi tin hoặc người nhận chưa tương tác OA (cửa sổ 48h).'
-              : '';
+        const code = typeof r.resp?.error === 'number' ? r.resp.error : undefined;
         this.logger.warn(`[zalo] gửi RFQ thất bại tới ${zaloUserId} : ${JSON.stringify(r.resp)}`);
-        return {
-          ok: false,
-          resp: r.resp,
-          error: (r.resp?.message ? `${r.resp.message} (error ${code})` : 'Zalo từ chối tin') + hint,
-        };
+        return { ok: false, resp: r.resp, code, error: zaloFriendlyError(code, r.resp?.message) };
       }
       const mid = r.resp?.data?.message_id;
       return { ok: true, resp: r.resp, messageId: mid == null ? undefined : String(mid) };

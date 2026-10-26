@@ -43,7 +43,7 @@ Công khai theo token: `GET /api/public/supplier-rfq/:token`, `POST /api/public/
 Unit: tạo/băm token, builder payload, validate nộp giá (số âm, thiếu mặt hàng, quá hạn), ma trận so sánh, rate limit. Tích hợp: Postgres tạm + Zalo giả (`ZALO_API_BASE`): gửi, nhắn thử, mở link, nộp giá 2 lần (version), so sánh, outbox. Tuyệt đối KHÔNG gọi Zalo thật trong test tự động.
 
 ## 8. Rủi ro
-- Định dạng tin `list` và điều kiện 48h của Zalo chưa xác minh với tài liệu chính thức; NCC chưa tương tác OA sẽ bị Zalo từ chối → lỗi hiển thị trong kết quả gửi.
+- Tin ảnh riêng (media/image) chưa xác minh định dạng; tin chữ + nút `oa.open.url` đã chạy thật trên cùng OA (ago-checklist-backend) nhưng Zalo có thể chỉ nhận link thuộc domain đã xác thực của OA (khi đó tự rơi về chữ + link thô); điều kiện 48h/7 ngày của Zalo với tài liệu chính thức; NCC chưa tương tác OA sẽ bị Zalo từ chối → lỗi hiển thị trong kết quả gửi.
 - NCC chỉ cần SĐT hoặc `zalo_user_id`: SĐT được tra ra user_id qua `ZaloClient.resolveZaloUserId` (và lưu lại); NCC phải đã Quan tâm OA, nếu chưa Zalo từ chối (-232/-201) và lỗi hiển thị trong kết quả gửi.
 - Trang công khai không đăng nhập: bảo vệ bằng token dài + hạn + giới hạn tần suất; không lộ dữ liệu NCC khác.
 - Production phải chạy 2 file SQL (outbox + supplier-rfq) trước khi bật.
@@ -57,3 +57,6 @@ Mới: `prisma/migrations-manual/2026-10-27-supplier-rfq.sql` (+ nối vào `pri
 Sửa: `src/app.module.ts` (đăng ký 2 module), `src/main.ts` (body thô cho ảnh RFQ), `src/modules/zalo/zalo.client.ts` (`ZALO_API_BASE`, `sendRfqMessage`), `src/shared/activityLabels.ts` (nhóm + nhãn NCC_*/RFQ_*), `.env.example`, `package.json`, README, `docs/01_ARCHITECTURE.md`.
 Hành vi cần biết: gửi lại (`resend`) SINH TOKEN MỚI (chỉ lưu hash nên không dựng lại link cũ; link cũ vô hiệu khi gửi lại thành công); lời mời thử không phát outbox; ảnh chỉ nhận PNG/JPEG/GIF/WebP (nhận diện theo byte, không SVG).
 DoD: `npm run lint`, `npm run build`, `npm test`, `npm run test:rfq` xanh; review không còn lỗi mức cao (bước review độc lập còn mở).
+
+## 10. Cập nhật: tin chữ + nút (thay list)
+Mode `list` (template list viết theo trí nhớ, bị Zalo từ chối → chủ hệ thống nhận chữ + link thô) được thay bằng `buttons`: `message.text` + `attachment.template.payload.buttons[{title:"Nhập giá", type:"oa.open.url"}]` (đã chạy thật ở ago-checklist-backend, cùng OA). Fallback `text` theo ShouldFallbackToText của hệ thống đó (không rơi về chữ với -230/-320/-32/-124/-216/-232/-201/-213/-214). Ảnh gửi bằng tin riêng best-effort trước tin báo giá. Giãn nhịp 700ms/cuộc gọi trong lượt gửi; lỗi Zalo ánh xạ sang tiếng Việt (`zaloFriendlyError`).

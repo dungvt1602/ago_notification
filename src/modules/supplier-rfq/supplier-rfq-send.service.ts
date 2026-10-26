@@ -10,7 +10,13 @@ import { ZaloClient } from '../zalo/zalo.client';
 import { httpError, MSG, rfqBaseUrl } from './rfq-errors';
 import { generateToken, hashToken, invitationExpiry } from './rfq-token';
 import { SupplierRfqRepository } from './supplier-rfq.repository';
-import { buildRfqMessage, type RfqMessageInput, type RfqMessageMode } from './zalo-rfq-message';
+import {
+  buildRfqImageMessage,
+  buildRfqMessage,
+  shouldFallbackToText,
+  type RfqMessageInput,
+  type RfqMessageMode,
+} from './zalo-rfq-message';
 
 type Rfq = NonNullable<Awaited<ReturnType<SupplierRfqRepository['findWithItems']>>>;
 type Supplier = Awaited<ReturnType<SupplierRfqRepository['findSuppliersByIds']>>[number];
@@ -21,7 +27,9 @@ export type DeliverResult = {
   error?: string;
   zalo?: unknown;
   messageId?: string;
-  listError?: string;
+  buttonError?: string; // lỗi của tin có nút (khi đã rơi về chữ hoặc cả hai đều hỏng)
+  imageSent: boolean;
+  imageError?: string;
 };
 
 export type SendResult = {
@@ -68,22 +76,50 @@ export class SupplierRfqSendService {
     private readonly audit: AuditService,
   ) {}
 
+  // Giãn nhịp gọi Zalo trong một lượt gửi: tối thiểu paceMs giữa hai lần gọi (OA gói thường ~100 request/phút).
+  paceMs = 700;
+  private lastZaloAt = 0;
+  private async gap(): Promise<void> {
+    const wait = this.lastZaloAt + this.paceMs - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    this.lastZaloAt = Date.now();
+  }
+
   /*
-   * Gửi tin RFQ tới 1 user_id: thử 'list' (ảnh + nút), Zalo từ chối thì lùi về 'text'. Cả hai lỗi -> trả lỗi của
-   * cả hai để người dùng thấy lý do thật. Không bao giờ ném lỗi.
+   * Gửi RFQ tới 1 user_id: (1) tin ảnh riêng nếu có — lỗi chỉ ghi imageError, KHÔNG chặn; (2) tin có nút "Nhập giá";
+   * Zalo từ chối bằng lỗi nghiệp vụ (không thuộc nhóm người nhận/hạn mức/token) thì thử lại ĐÚNG MỘT lần dạng chữ.
+   * Không bao giờ ném lỗi. pace=true (gửi hàng loạt) thì giãn nhịp giữa các cuộc gọi; nhắn thử không chờ.
    */
-  async deliver(zaloUserId: string, input: RfqMessageInput): Promise<DeliverResult> {
-    const list = await this.zalo.sendRfqMessage(zaloUserId, buildRfqMessage('list', input));
-    if (list.ok) return { ok: true, mode: 'list', zalo: list.resp, messageId: list.messageId };
-    const text = await this.zalo.sendRfqMessage(zaloUserId, buildRfqMessage('text', input));
+  async deliver(zaloUserId: string, input: RfqMessageInput, pace = false): Promise<DeliverResult> {
+    const call = async (msg: Record<string, unknown>) => {
+      if (pace) await this.gap();
+      return this.zalo.sendRfqMessage(zaloUserId, msg);
+    };
+    let imageSent = false;
+    let imageError: string | undefined;
+    if (input.imageUrl) {
+      const img = await call(buildRfqImageMessage(input.imageUrl));
+      imageSent = img.ok;
+      if (!img.ok) imageError = img.error ?? 'Gửi ảnh lỗi';
+    }
+    const img = { imageSent, ...(imageError ? { imageError } : {}) };
+    const btn = await call(buildRfqMessage('buttons', input));
+    if (btn.ok) return { ok: true, mode: 'buttons', zalo: btn.resp, messageId: btn.messageId, ...img };
+    const buttonError = btn.error ?? 'lỗi';
+    if (!shouldFallbackToText(btn.code)) {
+      return { ok: false, mode: 'buttons', zalo: btn.resp, error: buttonError, buttonError, ...img };
+    }
+    const text = await call(buildRfqMessage('text', input));
     if (text.ok) {
-      return { ok: true, mode: 'text', zalo: text.resp, messageId: text.messageId, listError: list.error };
+      return { ok: true, mode: 'text', zalo: text.resp, messageId: text.messageId, buttonError, ...img };
     }
     return {
       ok: false,
       mode: 'text',
-      zalo: text.resp ?? list.resp,
-      error: `Dạng list: ${list.error ?? 'lỗi'}; dạng text: ${text.error ?? 'lỗi'}`,
+      zalo: text.resp ?? btn.resp,
+      error: text.error ?? 'lỗi',
+      buttonError,
+      ...img,
     };
   }
 
@@ -204,6 +240,7 @@ export class SupplierRfqSendService {
     let zaloId = target;
     if (!isDryRun()) {
       try {
+        await this.gap();
         zaloId = await this.zalo.resolveZaloUserId(target);
       } catch (err) {
         return {
@@ -263,7 +300,7 @@ export class SupplierRfqSendService {
         // Gửi giả: không gọi mạng, chỉ đánh dấu DRYRUN- để tra log biết tin không có thật.
         res = { ok: true, messageId: dryRunMessageId() };
       } else {
-        res = await this.deliver(zaloId, this.messageInput(rfq, link, baseUrl));
+        res = await this.deliver(zaloId, this.messageInput(rfq, link, baseUrl), true);
       }
     } catch (err) {
       res = { ok: false, error: friendlyError(err) };
@@ -312,7 +349,13 @@ export class SupplierRfqSendService {
     try {
       zaloId = await this.zalo.resolveZaloUserId(input.zaloUserId);
     } catch (err) {
-      return { ok: false, mode: 'list' as RfqMessageMode, link: '', error: friendlyError(err) };
+      return {
+        ok: false,
+        mode: 'buttons' as RfqMessageMode,
+        link: '',
+        imageSent: false,
+        error: friendlyError(err),
+      };
     }
     const now = new Date();
     const token = generateToken();
@@ -346,7 +389,9 @@ export class SupplierRfqSendService {
       ...(zaloId !== input.zaloUserId ? { resolvedUserId: zaloId } : {}),
       ...(res.error ? { error: res.error } : {}),
       ...(res.zalo !== undefined ? { zalo: res.zalo } : {}),
-      ...(res.listError ? { listError: res.listError } : {}),
+      ...(res.buttonError ? { buttonError: res.buttonError } : {}),
+      imageSent: res.imageSent,
+      ...(res.imageError ? { imageError: res.imageError } : {}),
     };
   }
 }

@@ -1,4 +1,10 @@
-import { buildRfqMessage, formatDeadlineVN, type RfqMessageInput } from './zalo-rfq-message';
+import {
+  buildRfqImageMessage,
+  buildRfqMessage,
+  formatDeadlineVN,
+  shouldFallbackToText,
+  type RfqMessageInput,
+} from './zalo-rfq-message';
 
 const base: RfqMessageInput = {
   code: 'RFQ-2026-0001',
@@ -10,54 +16,75 @@ const base: RfqMessageInput = {
   imageUrl: 'http://app.test/api/supplier-rfqs/1/image',
 };
 
-type ListMsg = {
-  attachment: {
-    type: string;
-    payload: { template_type: string; elements: Array<Record<string, unknown>> };
-  };
-};
-
 describe('buildRfqMessage', () => {
   it('định dạng hạn theo giờ Việt Nam', () => {
     expect(formatDeadlineVN(base.deadline as Date)).toBe('17:30 10/11/2026');
   });
 
-  it('list: 1 phần tử có ảnh + default_action mở link', () => {
-    const m = buildRfqMessage('list', base) as ListMsg;
-    expect(m.attachment.type).toBe('template');
-    expect(m.attachment.payload.template_type).toBe('list');
-    expect(m.attachment.payload.elements).toHaveLength(1);
-    const el = m.attachment.payload.elements[0];
-    expect(el.title).toBe('Xoài cát Hoà Lộc');
-    expect(el.subtitle).toContain('RFQ-2026-0001');
-    expect(el.subtitle).toContain('3 mặt hàng');
-    expect(el.subtitle).toContain('17:30 10/11/2026');
-    expect(el.image_url).toBe(base.imageUrl);
-    expect(el.default_action).toEqual({ type: 'oa.open.url', url: base.link });
+  it('buttons: JSON chính xác (chữ + 1 nút Nhập giá), không có link thô trong chữ', () => {
+    expect(buildRfqMessage('buttons', base)).toEqual({
+      text: 'Yêu cầu báo giá RFQ-2026-0001\nXoài cát Hoà Lộc\nHạn báo giá: 17:30 10/11/2026\nSố mặt hàng: 3',
+      attachment: {
+        type: 'template',
+        payload: {
+          buttons: [
+            { title: 'Nhập giá', type: 'oa.open.url', payload: { url: 'http://app.test/ncc/TOKEN' } },
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(buildRfqMessage('buttons', base).text)).not.toContain('http');
   });
 
-  it('list: không có ảnh thì bỏ image_url; không hạn thì bỏ dòng hạn', () => {
-    const m = buildRfqMessage('list', { ...base, imageUrl: null, deadline: null }) as ListMsg;
-    const el = m.attachment.payload.elements[0];
-    expect('image_url' in el).toBe(false);
-    expect(String(el.subtitle)).not.toContain('Hạn');
-  });
-
-  it('list: cắt tiêu đề quá dài', () => {
-    const m = buildRfqMessage('list', { ...base, title: 'x'.repeat(300) }) as ListMsg;
-    expect(String(m.attachment.payload.elements[0].title).length).toBeLessThanOrEqual(100);
-  });
-
-  it('text: có mã, tiêu đề, hạn và link', () => {
-    const m = buildRfqMessage('text', base) as { text: string };
-    expect(m.text).toContain('RFQ-2026-0001');
-    expect(m.text).toContain('Xoài cát Hoà Lộc');
-    expect(m.text).toContain('Hạn báo giá: 17:30 10/11/2026');
-    expect(m.text).toContain(base.link);
-  });
-
-  it('text: không hạn thì không in dòng hạn', () => {
-    const m = buildRfqMessage('text', { ...base, deadline: null }) as { text: string };
+  it('buttons: có ghi chú thì chèn trước "Số mặt hàng" và cắt ~300 ký tự; không hạn thì bỏ dòng hạn', () => {
+    const m = buildRfqMessage('buttons', { ...base, deadline: null, note: ' ' + 'n'.repeat(500) }) as {
+      text: string;
+    };
+    const lines = m.text.split('\n');
+    expect(lines).toHaveLength(4);
+    expect(lines[2].length).toBe(300);
+    expect(lines[2].endsWith('…')).toBe(true);
+    expect(lines[3]).toBe('Số mặt hàng: 3');
     expect(m.text).not.toContain('Hạn');
+  });
+
+  it('tiêu đề nút ≤ 20 ký tự', () => {
+    const m = buildRfqMessage('buttons', base) as {
+      attachment: { payload: { buttons: Array<{ title: string }> } };
+    };
+    expect(m.attachment.payload.buttons[0].title.length).toBeLessThanOrEqual(20);
+  });
+
+  it('text: cùng nội dung + dòng link thô', () => {
+    expect(buildRfqMessage('text', base)).toEqual({
+      text: 'Yêu cầu báo giá RFQ-2026-0001\nXoài cát Hoà Lộc\nHạn báo giá: 17:30 10/11/2026\nSố mặt hàng: 3\n\nBấm vào link để nhập giá: http://app.test/ncc/TOKEN',
+    });
+  });
+});
+
+describe('buildRfqImageMessage', () => {
+  it('JSON chính xác của tin ảnh (media/image)', () => {
+    expect(buildRfqImageMessage('http://app.test/api/supplier-rfqs/1/image')).toEqual({
+      attachment: {
+        type: 'template',
+        payload: {
+          template_type: 'media',
+          elements: [{ media_type: 'image', url: 'http://app.test/api/supplier-rfqs/1/image' }],
+        },
+      },
+    });
+  });
+});
+
+describe('shouldFallbackToText', () => {
+  it('không rơi về chữ với lỗi người nhận / hạn mức / token và lỗi không có mã', () => {
+    for (const c of [-230, -320, -32, -124, -216, -232, -201, -213, -214]) {
+      expect(shouldFallbackToText(c)).toBe(false);
+    }
+    expect(shouldFallbackToText(undefined)).toBe(false);
+    expect(shouldFallbackToText(0)).toBe(false);
+  });
+  it('lỗi nghiệp vụ khác (vd. link nút bị từ chối) thì rơi về chữ', () => {
+    for (const c of [-1, -100, -233, -999]) expect(shouldFallbackToText(c)).toBe(true);
   });
 });

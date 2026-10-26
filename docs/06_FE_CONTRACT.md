@@ -29,7 +29,7 @@ Quy ước chung như trên: lỗi `{ "error": string }`, id là **chuỗi**, ti
 - `POST /api/supplier-rfqs/:id/send` `{supplierIds:[id], resend?:boolean}` → `{results:[{supplierId, supplierName, ok, status, error?, invitationId?}]}`
 - `POST /api/supplier-rfqs/:id/close` → `RfqDetail`
 - `GET /api/supplier-rfqs/test-recipients` → `[{userId, name, zaloUserId}]` (nhân viên đã liên kết Zalo)
-- `POST /api/supplier-rfqs/:id/test-send` `{zaloUserId*}` → `{ok, mode:"list"|"text", link, error?, zalo?}` (luôn gọi Zalo thật; `zalo` = phản hồi thô của Zalo để chẩn đoán)
+- `POST /api/supplier-rfqs/:id/test-send` `{zaloUserId*}` → `{ok, mode:"buttons"|"text", link, error?, buttonError?, imageSent, imageError?, resolvedUserId?, zalo?}` (luôn gọi Zalo thật; `zalo` = phản hồi thô của Zalo để chẩn đoán)
 - `GET /api/supplier-rfqs/:id/compare` → `{rfq:{id,code,title,currency,deadline,status}, suppliers:[{invitationId, supplierId, name, status, submittedAt, version, currency, note}], rows:[{itemId, no, product, unit, quantity, prices:[{invitationId, unitPrice, moq, leadTimeDays, note}|null], bestInvitationId|null}]}`
 - `RfqDetail = {id, code, title, note, currency, deadline, status:"DRAFT"|"SENT"|"CLOSED", hasImage, createdAt, items:[{id, no, product, spec, unit, quantity, note}], invitations:[{id, supplierId, supplierName, status:"PENDING"|"SENT"|"VIEWED"|"SUBMITTED"|"EXPIRED"|"FAILED", isTest, sentAt, viewedAt, submittedAt, error}]}`
 
@@ -49,4 +49,11 @@ Quy ước chung như trên: lỗi `{ "error": string }`, id là **chuỗi**, ti
 ### Người nhận Zalo theo SĐT (bổ sung)
 - `send` (gửi thật): người nhận = `supplier.zaloUserId` nếu có, không thì `supplier.phone`; SĐT được tra ra user_id qua Zalo (`/v3.0/oa/user/detail`) TRƯỚC khi gửi, tra được thì tự lưu vào `suppliers.zalo_user_id`. NCC phải đã Quan tâm OA. Gửi giả (dry-run) không tra.
 - `results[].error` mới/đổi: `Nhà cung cấp chưa có SĐT hoặc Zalo user_id.` (thay cho "chưa có Zalo user_id"); lỗi tra SĐT dạng `SĐT … chưa Quan tâm OA nên Zalo không cho nhắn. …` hoặc `Không tra được user_id Zalo cho SĐT …`. Tra lỗi thì KHÔNG tạo/đổi lời mời hay token (status giữ nguyên, `invitationId` chỉ có nếu đã tồn tại).
-- `test-send`: `zaloUserId` nhận user_id HOẶC SĐT (chữ số, có thể + đầu, khoảng trắng . -; ≤50 ký tự; sai khuôn → 400). Nếu là SĐT, response thêm `resolvedUserId`. Tra SĐT lỗi → HTTP 200 `{ok:false, mode:"list", link:"", error}` (không tạo lời mời thử, không gọi Zalo gửi tin).
+- `test-send`: `zaloUserId` nhận user_id HOẶC SĐT (chữ số, có thể + đầu, khoảng trắng . -; ≤50 ký tự; sai khuôn → 400). Nếu là SĐT, response thêm `resolvedUserId`. Tra SĐT lỗi → HTTP 200 `{ok:false, mode:"buttons", link:"", imageSent:false, error}` (không tạo lời mời thử, không gọi Zalo gửi tin).
+
+### Tin Zalo dạng chữ + nút (thay dạng list)
+- Tin báo giá gửi NCC/nhắn thử: chữ (mã RFQ, tiêu đề, hạn, ghi chú, số mặt hàng) + MỘT nút "Nhập giá" mở link (định dạng đã chạy thật trên cùng OA ở hệ thống ago-checklist). Nếu RFQ có ảnh, gửi TRƯỚC một tin ảnh riêng (best-effort, lỗi không chặn tin báo giá).
+- `test-send` response: `mode` là `"buttons"` | `"text"` (không còn `"list"`); BỎ `listError`, thay bằng `buttonError` (lỗi của tin có nút khi đã rơi về chữ hoặc cả hai cùng hỏng; khi cả hai hỏng thì `error` là lỗi của lần chữ); thêm `imageSent:boolean` và `imageError?` (bắt buộc có `imageSent`, cả khi RFQ không có ảnh = false).
+- Rơi về chữ chỉ khi Zalo từ chối tin có nút bằng lỗi nghiệp vụ KHÁC {-230,-320,-32,-124,-216,-232,-201,-213,-214}; nhóm đó trả lỗi luôn (mode `"buttons"`, `ok:false`).
+- Lỗi thân thiện (`results[].error` của send và `error` của test-send; JSON thô vẫn ở `zalo`): -230 `Người nhận không tương tác với OA quá 7 ngày — nhờ họ nhắn OA một tin rồi gửi lại.`; -320 `App Zalo chưa nối Zalo Cloud Account nên không gửi được tin ngoài khung 48 giờ (tin tính phí).`; -32 `OA chạm hạn mức gọi API, thử lại sau 1 phút.`; -232/-201 `… (error -232) — user_id không tồn tại hoặc người này chưa Quan tâm / chưa nhắn OA.`
+- `send` giãn nhịp ≥700ms giữa hai cuộc gọi Zalo trong một lượt (lượt nhiều NCC chạy lâu hơn); `results` không đổi cấu trúc.
