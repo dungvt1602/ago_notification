@@ -21,9 +21,9 @@ describe('buildRfqMessage', () => {
     expect(formatDeadlineVN(base.deadline as Date)).toBe('17:30 10/11/2026');
   });
 
-  it('buttons: JSON chính xác (chữ + 1 nút Nhập giá), không có link thô trong chữ', () => {
+  it('buttons: JSON chính xác (chữ + 1 nút Nhập giá + dòng link dự phòng nhỏ)', () => {
     expect(buildRfqMessage('buttons', base)).toEqual({
-      text: 'Yêu cầu báo giá RFQ-2026-0001\nXoài cát Hoà Lộc\nHạn báo giá: 17:30 10/11/2026\nSố mặt hàng: 3',
+      text: 'Yêu cầu báo giá RFQ-2026-0001\nXoài cát Hoà Lộc\nHạn báo giá: 17:30 10/11/2026\nSố mặt hàng: 3\n\nKhông thấy nút? Mở link: http://app.test/ncc/TOKEN',
       attachment: {
         type: 'template',
         payload: {
@@ -33,7 +33,6 @@ describe('buildRfqMessage', () => {
         },
       },
     });
-    expect(JSON.stringify(buildRfqMessage('buttons', base).text)).not.toContain('http');
   });
 
   it('buttons: có ghi chú thì chèn trước "Số mặt hàng" và cắt ~300 ký tự; không hạn thì bỏ dòng hạn', () => {
@@ -41,7 +40,7 @@ describe('buildRfqMessage', () => {
       text: string;
     };
     const lines = m.text.split('\n');
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(6); // 4 dòng nội dung + dòng trống + dòng link dự phòng
     expect(lines[2].length).toBe(300);
     expect(lines[2].endsWith('…')).toBe(true);
     expect(lines[3]).toBe('Số mặt hàng: 3');

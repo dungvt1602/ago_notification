@@ -49,8 +49,9 @@ export function buildRfqMessage(mode: RfqMessageMode, input: RfqMessageInput): Z
   if (mode === 'text') {
     return { text: [...bodyLines(input), '', `Bấm vào link để nhập giá: ${input.link}`].join('\n') };
   }
+  // Zalo PC/web không vẽ nút của tin tư vấn -> kèm dòng link nhỏ ở cuối để NCC nào cũng mở được form.
   return {
-    text: bodyLines(input).join('\n'),
+    text: [...bodyLines(input), '', `Không thấy nút? Mở link: ${input.link}`].join('\n'),
     attachment: {
       type: 'template',
       payload: {
