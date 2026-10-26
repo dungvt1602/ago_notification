@@ -90,6 +90,10 @@ type ZaloCall = {
 };
 const zaloCalls: ZaloCall[] = [];
 let failFirstList = true; // lần gọi 'list' đầu tiên bị từ chối để thử đường lùi sang text
+// Tra SĐT -> user_id (GET /v3.0/oa/user/detail): chỉ SĐT này (đã chuẩn hoá 84...) được Zalo giả nhận ra.
+const KNOWN_PHONE = '84900000001';
+const RESOLVED_ID = '777777777777777777';
+const detailCalls: Array<{ token: string | undefined; phone: string }> = [];
 const failUsers = new Set<string>(); // user_id luôn bị từ chối (cả list lẫn text)
 const delayUsers = new Set<string>(); // user_id trả lời chậm 400ms (để thử gửi đồng thời)
 let zaloServer: http.Server;
@@ -136,6 +140,14 @@ function startFakeZalo(): Promise<void> {
           message: 'Success',
           data: { message_id: `FAKE-${zaloCalls.length}`, user_id: userId },
         });
+      }
+      if (req.method === 'GET' && (req.url ?? '').startsWith('/v3.0/oa/user/detail')) {
+        const q = new URL(req.url ?? '', 'http://x').searchParams.get('data') ?? '{}';
+        const phone = (JSON.parse(q) as { user_id?: string }).user_id ?? '';
+        detailCalls.push({ token: req.headers['access_token'] as string | undefined, phone });
+        if (phone === KNOWN_PHONE)
+          return reply({ error: 0, message: 'Success', data: { user_id: RESOLVED_ID } });
+        return reply({ error: -232, message: "User hasn't interacted yet" });
       }
       res.writeHead(404);
       res.end('fake zalo: not found');
@@ -483,8 +495,8 @@ async function main(): Promise<void> {
   );
   check(res1[1]?.ok === true && res1[1]?.status === 'SENT', 'Beta gửi được (list)', res1[1]);
   check(
-    res1[2]?.ok === false && res1[2]?.error === 'Nhà cung cấp chưa có Zalo user_id.',
-    'NoZalo bị từ chối đúng câu',
+    res1[2]?.ok === false && String(res1[2]?.error).includes('chưa Quan tâm OA') && !res1[2]?.invitationId,
+    'NCC chỉ có SĐT lạ: lỗi thân thiện, không tạo lời mời',
     res1[2],
   );
   const toA = zaloCalls.filter((c) => c.userId === A.zaloUserId);
@@ -913,6 +925,80 @@ async function main(): Promise<void> {
     'nhật ký thao tác nội bộ',
   );
 
+  step('Gửi theo SĐT (tra user_id qua Zalo giả)');
+  const P = (await call('POST', '/api/suppliers', { name: 'NCC Phone', phone: '0900 000 001' })).json;
+  const U = (await call('POST', '/api/suppliers', { name: 'NCC SĐT lạ', phone: '0900000077' })).json;
+  const E = (await call('POST', '/api/suppliers', { name: 'NCC Trống' })).json;
+  const rq = (
+    await call('POST', '/api/supplier-rfqs', { title: 'Gửi theo SĐT', items: [{ product: 'Dừa' }] })
+  ).json;
+  const zc1 = zaloCalls.length;
+  const sp1 = await call('POST', `/api/supplier-rfqs/${rq.id}/send`, { supplierIds: [P.id, U.id, E.id] });
+  const rr: Array<Record<string, unknown>> = sp1.json?.results ?? [];
+  check(rr[0]?.ok === true && rr[0]?.status === 'SENT', 'NCC chỉ có SĐT: gửi được', rr[0]);
+  check(
+    zaloCalls.length === zc1 + 1 && zaloCalls.at(-1)?.userId === RESOLVED_ID,
+    'tin gửi tới user_id đã tra từ SĐT',
+    zaloCalls.at(-1)?.userId,
+  );
+  check(
+    detailCalls.some((d) => d.phone === KNOWN_PHONE && d.token === 'fake-token'),
+    'đã gọi user/detail với SĐT chuẩn hoá 84...',
+    detailCalls,
+  );
+  const pz = (
+    await q<{ zalo_user_id: string | null }>(`select zalo_user_id from suppliers where id=$1`, [P.id])
+  )[0].zalo_user_id;
+  check(pz === RESOLVED_ID, 'user_id tra được đã lưu vào NCC', pz);
+  check(
+    rr[1]?.ok === false && String(rr[1]?.error).includes('chưa Quan tâm OA'),
+    'SĐT lạ -> lỗi thân thiện',
+    rr[1],
+  );
+  check(
+    rr[2]?.ok === false && rr[2]?.error === 'Nhà cung cấp chưa có SĐT hoặc Zalo user_id.',
+    'NCC không SĐT/ID -> đúng câu',
+    rr[2],
+  );
+  const stuck = await q<{ c: string }>(
+    `select count(*)::text as c from supplier_rfq_invitations where supplier_id in ($1,$2)`,
+    [U.id, E.id],
+  );
+  check(stuck[0].c === '0', 'tra lỗi / thiếu thông tin: không để lại lời mời treo', stuck);
+  const sp2 = await call('POST', `/api/supplier-rfqs/${rq.id}/send`, { supplierIds: [P.id] });
+  check(
+    sp2.json.results[0].error === 'Đã gửi trước đó.' && zaloCalls.length === zc1 + 1,
+    'gửi lại NCC đã gửi: bỏ qua, không tra/gửi thêm',
+  );
+
+  const tz0 = zaloCalls.length;
+  const tp = await call('POST', `/api/supplier-rfqs/${rfqId}/test-send`, { zaloUserId: '0900 000.001' });
+  check(
+    tp.status === 200 && tp.json.ok === true && tp.json.resolvedUserId === RESOLVED_ID,
+    'test-send bằng SĐT: resolvedUserId',
+    tp.json,
+  );
+  check(
+    zaloCalls.length === tz0 + 1 && zaloCalls.at(-1)?.userId === RESOLVED_ID,
+    'test-send gửi tới id đã tra',
+  );
+  const tpUnknown = await call('POST', `/api/supplier-rfqs/${rfqId}/test-send`, { zaloUserId: '0900000099' });
+  check(
+    tpUnknown.status === 200 &&
+      tpUnknown.json.ok === false &&
+      String(tpUnknown.json.error).includes('chưa Quan tâm OA'),
+    'test-send SĐT lạ: ok=false HTTP 200 + lỗi thân thiện',
+    tpUnknown.json,
+  );
+  check(zaloCalls.length === tz0 + 1, 'SĐT lạ: không gửi gì');
+  check(
+    !(
+      'resolvedUserId' in
+      (await call('POST', `/api/supplier-rfqs/${rfqId}/test-send`, { zaloUserId: '333333' })).json
+    ),
+    'test-send bằng user_id: không có resolvedUserId',
+  );
+
   // ===== Resend =====
   step('Gửi lại có resend');
   const before = zaloCalls.length;
@@ -1165,7 +1251,10 @@ async function main(): Promise<void> {
   await call('POST', `/api/supplier-rfqs/${rc.json.id}/test-send`, { zaloUserId: '333' });
   check(zaloCalls.length === zcap, 'bị chặn thì không gọi Zalo');
   check(
-    !zaloCalls.some((c) => !['111111111111111111', '222222222222222222', '333', '000'].includes(c.userId)),
+    !zaloCalls.some(
+      (c) =>
+        !['111111111111111111', '222222222222222222', '333', '000', '333333', RESOLVED_ID].includes(c.userId),
+    ),
     'Zalo giả chỉ nhận user_id đã chỉ định',
   );
 }

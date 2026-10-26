@@ -9,7 +9,7 @@ export const MSG = {
   linkInvalid: 'Link không hợp lệ hoặc đã hết hạn.',
   pastDeadline: 'Đã quá hạn báo giá.',
   tooFast: 'Thao tác quá nhanh, thử lại sau.',
-  noZaloUserId: 'Nhà cung cấp chưa có Zalo user_id.',
+  noZaloUserId: 'Nhà cung cấp chưa có SĐT hoặc Zalo user_id.',
   alreadySent: 'Đã gửi trước đó.',
   inFlight: 'Đang gửi cho nhà cung cấp này, vui lòng chờ.',
   inactive: 'Nhà cung cấp đã ngừng hoạt động.',

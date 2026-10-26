@@ -86,8 +86,16 @@ export const sendRfqSchema = z.object({
   resend: z.boolean().optional(),
 });
 
+// Nhận Zalo user_id hoặc SĐT (có thể có khoảng trắng . - và +/0/84 ở đầu); trả về chuỗi đã bỏ dấu phân cách.
 export const testSendSchema = z.object({
-  zaloUserId: z.string().trim().min(1, 'Vui lòng chọn người nhận thử').max(50, 'Zalo user_id quá dài'),
+  zaloUserId: z
+    .string()
+    .trim()
+    .min(1, 'Vui lòng nhập Zalo user_id hoặc SĐT người nhận thử')
+    .max(50, 'Zalo user_id / SĐT quá dài')
+    .regex(/^\+?[\d\s.-]+$/, 'Chỉ nhập chữ số (SĐT có thể có khoảng trắng, dấu . hoặc -)')
+    .transform((v) => v.replace(/[\s.-]/g, ''))
+    .refine((v) => /^\+?\d+$/.test(v), 'Zalo user_id / SĐT không hợp lệ'),
 });
 
 // ---- NCC nộp giá (công khai) ----

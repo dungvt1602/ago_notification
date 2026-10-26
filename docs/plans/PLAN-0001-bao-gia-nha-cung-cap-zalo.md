@@ -44,7 +44,7 @@ Unit: tạo/băm token, builder payload, validate nộp giá (số âm, thiếu 
 
 ## 8. Rủi ro
 - Định dạng tin `list` và điều kiện 48h của Zalo chưa xác minh với tài liệu chính thức; NCC chưa tương tác OA sẽ bị Zalo từ chối → lỗi hiển thị trong kết quả gửi.
-- Cần `zalo_user_id` của NCC (lấy khi NCC nhắn OA/kích hoạt); thiếu thì không gửi được.
+- NCC chỉ cần SĐT hoặc `zalo_user_id`: SĐT được tra ra user_id qua `ZaloClient.resolveZaloUserId` (và lưu lại); NCC phải đã Quan tâm OA, nếu chưa Zalo từ chối (-232/-201) và lỗi hiển thị trong kết quả gửi.
 - Trang công khai không đăng nhập: bảo vệ bằng token dài + hạn + giới hạn tần suất; không lộ dữ liệu NCC khác.
 - Production phải chạy 2 file SQL (outbox + supplier-rfq) trước khi bật.
 - Chưa có hạn mức Zalo: gửi hàng loạt có thể vượt gói OA.

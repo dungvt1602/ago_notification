@@ -45,3 +45,8 @@ Quy ước chung như trên: lỗi `{ "error": string }`, id là **chuỗi**, ti
 - `PATCH /api/supplier-rfqs/:id` đổi `deadline` → dời hạn link của lời mời thật = hạn mới + 30 ngày.
 - Nộp giá công khai: `unitPrice` phải > 0 (bỏ trống để không báo giá mặt hàng đó); `currency` nếu gửi phải bằng tiền tệ của RFQ, sai → 400 `Tiền tệ phải là <CUR>.` (bỏ trống = tiền tệ RFQ); RFQ đã đóng → 400 `Yêu cầu báo giá đã đóng.`; body > 64kb → 413 `{error:"Dữ liệu gửi lên quá lớn."}`.
 - Giới hạn tần suất công khai: 30 lượt/phút theo token+IP và 120 lượt/phút theo IP (429 `Thao tác quá nhanh, thử lại sau.`). Ảnh RFQ POST tối đa 5MB (parser nhận tới 6MB để trả đúng thông báo).
+
+### Người nhận Zalo theo SĐT (bổ sung)
+- `send` (gửi thật): người nhận = `supplier.zaloUserId` nếu có, không thì `supplier.phone`; SĐT được tra ra user_id qua Zalo (`/v3.0/oa/user/detail`) TRƯỚC khi gửi, tra được thì tự lưu vào `suppliers.zalo_user_id`. NCC phải đã Quan tâm OA. Gửi giả (dry-run) không tra.
+- `results[].error` mới/đổi: `Nhà cung cấp chưa có SĐT hoặc Zalo user_id.` (thay cho "chưa có Zalo user_id"); lỗi tra SĐT dạng `SĐT … chưa Quan tâm OA nên Zalo không cho nhắn. …` hoặc `Không tra được user_id Zalo cho SĐT …`. Tra lỗi thì KHÔNG tạo/đổi lời mời hay token (status giữ nguyên, `invitationId` chỉ có nếu đã tồn tại).
+- `test-send`: `zaloUserId` nhận user_id HOẶC SĐT (chữ số, có thể + đầu, khoảng trắng . -; ≤50 ký tự; sai khuôn → 400). Nếu là SĐT, response thêm `resolvedUserId`. Tra SĐT lỗi → HTTP 200 `{ok:false, mode:"list", link:"", error}` (không tạo lời mời thử, không gọi Zalo gửi tin).

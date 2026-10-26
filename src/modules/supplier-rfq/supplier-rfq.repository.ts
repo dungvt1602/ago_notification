@@ -175,6 +175,11 @@ export class SupplierRfqRepository {
     return prisma.supplier.findMany({ where: { id: { in: ids } } });
   }
 
+  // Lưu user_id đã tra từ SĐT (chỉ khi NCC còn trống, không đè giá trị người dùng vừa nhập).
+  setSupplierZaloUserId(id: bigint, zaloUserId: string) {
+    return prisma.supplier.updateMany({ where: { id, zaloUserId: null }, data: { zaloUserId } });
+  }
+
   findInvitation(rfqId: bigint, supplierId: bigint) {
     return prisma.supplierRfqInvitation.findFirst({ where: { rfqId, supplierId } });
   }

@@ -40,6 +40,9 @@ const DELIVERED = new Set(['SENT', 'VIEWED', 'SUBMITTED']);
 const TEST_MAX_PER_HOUR = 20;
 
 // Không bao giờ trả thông điệp Prisma thô (lộ tên bảng/cột/câu truy vấn) ra kết quả gửi.
+// SĐT hay nhập có khoảng trắng / chấm / gạch ngang -> bỏ đi cho resolveZaloUserId nhận ra là số điện thoại.
+const cleanTarget = (v: string) => v.replace(/[\s.-]/g, '');
+
 function friendlyError(err: unknown): string {
   if (
     err instanceof Prisma.PrismaClientKnownRequestError ||
@@ -184,7 +187,9 @@ export class SupplierRfqSendService {
         invitationId: existing?.id.toString(),
       };
     }
-    if (!supplier.zaloUserId) {
+    // Người nhận = Zalo user_id nếu có, không thì SĐT (Zalo tự yêu cầu họ đã Quan tâm OA).
+    const target = cleanTarget(supplier.zaloUserId || supplier.phone || '');
+    if (!target) {
       return {
         ...base,
         ok: false,
@@ -192,6 +197,27 @@ export class SupplierRfqSendService {
         error: MSG.noZaloUserId,
         invitationId: existing?.id.toString(),
       };
+    }
+
+    // Đổi SĐT -> user_id TRƯỚC khi đụng lời mời/token: tra lỗi thì trạng thái không bị thay đổi gì. Gửi giả (dry-run)
+    // không gọi mạng nên không tra.
+    let zaloId = target;
+    if (!isDryRun()) {
+      try {
+        zaloId = await this.zalo.resolveZaloUserId(target);
+      } catch (err) {
+        return {
+          ...base,
+          ok: false,
+          status: existing?.status ?? 'FAILED',
+          error: friendlyError(err),
+          invitationId: existing?.id.toString(),
+        };
+      }
+      if (!supplier.zaloUserId && zaloId !== target) {
+        // Lưu để lần sau khỏi tra lại; hỏng cũng không làm hỏng lượt gửi.
+        await this.repo.setSupplierZaloUserId(supplier.id, zaloId).catch(() => undefined);
+      }
     }
 
     const now = new Date();
@@ -237,7 +263,7 @@ export class SupplierRfqSendService {
         // Gửi giả: không gọi mạng, chỉ đánh dấu DRYRUN- để tra log biết tin không có thật.
         res = { ok: true, messageId: dryRunMessageId() };
       } else {
-        res = await this.deliver(supplier.zaloUserId, this.messageInput(rfq, link, baseUrl));
+        res = await this.deliver(zaloId, this.messageInput(rfq, link, baseUrl));
       }
     } catch (err) {
       res = { ok: false, error: friendlyError(err) };
@@ -281,6 +307,13 @@ export class SupplierRfqSendService {
     ) {
       throw httpError(429, MSG.tooManyTests);
     }
+    // Nhận user_id HOẶC SĐT: tra trước, lỗi (chưa Quan tâm OA...) trả ok:false (HTTP 200), chưa tạo lời mời nào.
+    let zaloId = input.zaloUserId;
+    try {
+      zaloId = await this.zalo.resolveZaloUserId(input.zaloUserId);
+    } catch (err) {
+      return { ok: false, mode: 'list' as RfqMessageMode, link: '', error: friendlyError(err) };
+    }
     const now = new Date();
     const token = generateToken();
     const link = `${baseUrl}/ncc/${token}`;
@@ -293,7 +326,7 @@ export class SupplierRfqSendService {
       expiresAt: invitationExpiry(rfq.deadline, now),
       channel: 'ZALO',
     });
-    const res = await this.deliver(input.zaloUserId, this.messageInput(rfq, link, baseUrl));
+    const res = await this.deliver(zaloId, this.messageInput(rfq, link, baseUrl));
     await this.repo.updateInvitation(
       inv.id,
       res.ok
@@ -310,6 +343,7 @@ export class SupplierRfqSendService {
       ok: res.ok,
       mode: res.mode,
       link,
+      ...(zaloId !== input.zaloUserId ? { resolvedUserId: zaloId } : {}),
       ...(res.error ? { error: res.error } : {}),
       ...(res.zalo !== undefined ? { zalo: res.zalo } : {}),
       ...(res.listError ? { listError: res.listError } : {}),

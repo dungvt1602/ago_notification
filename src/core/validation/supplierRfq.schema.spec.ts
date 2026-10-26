@@ -1,4 +1,10 @@
-import { createRfqSchema, patchRfqSchema, sendRfqSchema, submitQuoteSchema } from './supplierRfq.schema';
+import {
+  testSendSchema,
+  createRfqSchema,
+  patchRfqSchema,
+  sendRfqSchema,
+  submitQuoteSchema,
+} from './supplierRfq.schema';
 
 const ok = (items: unknown[], extra: Record<string, unknown> = {}) => ({ items, ...extra });
 const parse = (v: unknown) => submitQuoteSchema.safeParse(v);
@@ -96,5 +102,23 @@ describe('createRfqSchema / patchRfqSchema / sendRfqSchema', () => {
     expect(sendRfqSchema.safeParse({ supplierIds: [] }).success).toBe(false);
     expect(sendRfqSchema.safeParse({ supplierIds: ['abc'] }).success).toBe(false);
     expect(sendRfqSchema.parse({ supplierIds: [1, '2'], resend: true }).supplierIds).toEqual(['1', '2']);
+  });
+});
+
+describe('testSendSchema', () => {
+  it('nhận user_id hoặc SĐT, bỏ dấu phân cách', () => {
+    for (const [inp, out] of [
+      ['333333333333333333', '333333333333333333'],
+      ['0900 000.009', '0900000009'],
+      ['+84-900-000-009', '+84900000009'],
+      ['84900000009', '84900000009'],
+    ]) {
+      expect(testSendSchema.parse({ zaloUserId: inp }).zaloUserId).toBe(out);
+    }
+  });
+  it('từ chối chữ, rỗng, quá ngắn, quá dài', () => {
+    for (const bad of ['', 'abc', '09ab', '+', '--', '1'.repeat(51), '++84900000009']) {
+      expect(testSendSchema.safeParse({ zaloUserId: bad }).success).toBe(false);
+    }
   });
 });

@@ -25,7 +25,8 @@ const rfq = {
   items: [{ id: 11n, no: 1 }],
   image: { rfqId: 1n },
 };
-const sup = (id: bigint, zaloUserId: string | null, status = 'ACTIVE') => ({
+const sup = (id: bigint, zaloUserId: string | null, status = 'ACTIVE', phone: string | null = null) => ({
+  phone,
   id,
   name: `NCC ${id}`,
   zaloUserId,
@@ -56,9 +57,13 @@ function setup(
       return Promise.resolve();
     }),
     markSentIfDraft: jest.fn().mockResolvedValue({ count: 1 }),
+    setSupplierZaloUserId: jest.fn().mockResolvedValue({ count: 1 }),
     countTestInvitationsSince: jest.fn().mockResolvedValue(0),
   };
-  const zalo = { sendRfqMessage: jest.fn() };
+  const zalo = {
+    sendRfqMessage: jest.fn(),
+    resolveZaloUserId: jest.fn((x: string) => Promise.resolve(x)),
+  };
   const audit = { audit: jest.fn().mockResolvedValue(undefined) };
   const svc = new SupplierRfqSendService(
     repo as unknown as SupplierRfqRepository,
@@ -105,7 +110,7 @@ describe('SupplierRfqSendService', () => {
     const r = await t.svc.send(t.req, '1', { supplierIds: ['5'] });
     expect(r.results[0]).toMatchObject({
       ok: false,
-      error: 'Nhà cung cấp chưa có Zalo user_id.',
+      error: 'Nhà cung cấp chưa có SĐT hoặc Zalo user_id.',
     });
     expect(t.repo.createInvitation).not.toHaveBeenCalled();
     expect(t.zalo.sendRfqMessage).not.toHaveBeenCalled();
@@ -222,9 +227,9 @@ describe('SupplierRfqSendService', () => {
       resp: { error: 0, message: 'Success' },
       messageId: 'M9',
     });
-    const r = await t.svc.testSend(t.req, '1', { zaloUserId: '999' });
+    const r = await t.svc.testSend(t.req, '1', { zaloUserId: '999999' });
     expect(t.zalo.sendRfqMessage).toHaveBeenCalledTimes(1);
-    expect((t.zalo.sendRfqMessage.mock.calls[0] as [string])[0]).toBe('999');
+    expect((t.zalo.sendRfqMessage.mock.calls[0] as [string])[0]).toBe('999999');
     expect(r).toMatchObject({ ok: true, mode: 'list', zalo: { error: 0, message: 'Success' } });
     expect(r.link).toMatch(/^http:\/\/app\.test\/ncc\/[A-Za-z0-9_-]{43}$/);
     expect(t.repo.createInvitation).toHaveBeenCalledWith(
@@ -243,12 +248,12 @@ describe('SupplierRfqSendService', () => {
           : { ok: true, resp: { error: 0 } },
       ),
     );
-    const ra = await a.svc.testSend(a.req, '1', { zaloUserId: '9' });
+    const ra = await a.svc.testSend(a.req, '1', { zaloUserId: '999999' });
     expect(ra).toMatchObject({ ok: true, mode: 'text', listError: 'bad list', zalo: { error: 0 } });
 
     const b = setup();
     b.zalo.sendRfqMessage.mockResolvedValue({ ok: false, error: 'x', resp: { error: -213 } });
-    const rb = await b.svc.testSend(b.req, '1', { zaloUserId: '9' });
+    const rb = await b.svc.testSend(b.req, '1', { zaloUserId: '999999' });
     expect(rb).toMatchObject({ ok: false, mode: 'text', zalo: { error: -213 } });
     expect(rb.error).toContain('Dạng list');
     expect(b.invs[0].status).toBe('FAILED');
@@ -260,7 +265,7 @@ describe('SupplierRfqSendService', () => {
     const t = setup({ suppliers: [sup(5n, '111')] });
     const msg = 'Chưa cấu hình APP_BASE_URL (domain FE) — không thể tạo link báo giá.';
     await expect(t.svc.send(t.req, '1', { supplierIds: ['5'] })).rejects.toThrow(msg);
-    await expect(t.svc.testSend(t.req, '1', { zaloUserId: '9' })).rejects.toThrow(msg);
+    await expect(t.svc.testSend(t.req, '1', { zaloUserId: '999999' })).rejects.toThrow(msg);
     expect(t.zalo.sendRfqMessage).not.toHaveBeenCalled();
     expect(t.repo.createInvitation).not.toHaveBeenCalled();
   });
@@ -336,10 +341,105 @@ describe('SupplierRfqSendService', () => {
     realSend();
     const t = setup();
     t.repo.countTestInvitationsSince.mockResolvedValue(20);
-    await expect(t.svc.testSend(t.req, '1', { zaloUserId: '9' })).rejects.toMatchObject({
+    await expect(t.svc.testSend(t.req, '1', { zaloUserId: '999999' })).rejects.toMatchObject({
       status: 429,
       response: { error: 'Đã nhắn thử quá nhiều lần, thử lại sau.' },
     });
     expect(t.zalo.sendRfqMessage).not.toHaveBeenCalled();
+  });
+
+  it('người nhận: user_id thắng SĐT; không có user_id thì dùng SĐT; không có cả hai -> lỗi', async () => {
+    realSend();
+    const t = setup({
+      suppliers: [
+        sup(5n, '111', 'ACTIVE', '0900000001'),
+        sup(6n, null, 'ACTIVE', '0900000002'),
+        sup(7n, null),
+      ],
+    });
+    t.zalo.resolveZaloUserId.mockImplementation((x: string) =>
+      Promise.resolve(x === '0900000002' ? 'RESOLVED6' : x),
+    );
+    t.zalo.sendRfqMessage.mockResolvedValue({ ok: true });
+    const r = await t.svc.send(t.req, '1', { supplierIds: ['5', '6', '7'] });
+    expect(t.zalo.resolveZaloUserId.mock.calls.map((c) => c[0])).toEqual(['111', '0900000002']);
+    expect(t.zalo.sendRfqMessage.mock.calls.map((c) => c[0])).toEqual(['111', 'RESOLVED6']);
+    expect(r.results[2]).toMatchObject({ ok: false, error: 'Nhà cung cấp chưa có SĐT hoặc Zalo user_id.' });
+  });
+
+  it('SĐT có khoảng trắng/dấu được làm sạch trước khi tra; id tra được thì lưu vào NCC', async () => {
+    realSend();
+    const t = setup({ suppliers: [sup(6n, null, 'ACTIVE', '0900 000-002')] });
+    t.zalo.resolveZaloUserId.mockResolvedValue('RESOLVED6');
+    t.zalo.sendRfqMessage.mockResolvedValue({ ok: true });
+    await t.svc.send(t.req, '1', { supplierIds: ['6'] });
+    expect(t.zalo.resolveZaloUserId).toHaveBeenCalledWith('0900000002');
+    expect(t.repo.setSupplierZaloUserId).toHaveBeenCalledWith(6n, 'RESOLVED6');
+  });
+
+  it('lưu id lỗi không làm hỏng lượt gửi; NCC đã có user_id thì không ghi lại', async () => {
+    realSend();
+    const t = setup({ suppliers: [sup(6n, null, 'ACTIVE', '0900000002'), sup(5n, '111')] });
+    t.zalo.resolveZaloUserId.mockImplementation((x: string) => Promise.resolve(x === '111' ? '111' : 'R6'));
+    t.zalo.sendRfqMessage.mockResolvedValue({ ok: true });
+    t.repo.setSupplierZaloUserId.mockRejectedValue(new Error('db down'));
+    const r = await t.svc.send(t.req, '1', { supplierIds: ['6', '5'] });
+    expect(r.results.every((x) => x.ok)).toBe(true);
+    expect(t.repo.setSupplierZaloUserId).toHaveBeenCalledTimes(1);
+  });
+
+  it('dry-run: không tra SĐT (không gọi mạng)', async () => {
+    process.env.SEND_DRY_RUN = 'true';
+    process.env.APP_BASE_URL = 'http://app.test';
+    const t = setup({ suppliers: [sup(6n, null, 'ACTIVE', '0900000002')] });
+    const r = await t.svc.send(t.req, '1', { supplierIds: ['6'] });
+    expect(r.results[0]).toMatchObject({ ok: true, status: 'SENT' });
+    expect(t.zalo.resolveZaloUserId).not.toHaveBeenCalled();
+    expect(t.zalo.sendRfqMessage).not.toHaveBeenCalled();
+  });
+
+  it('tra SĐT lỗi: thông báo thân thiện, KHÔNG tạo/đổi lời mời và token cũ giữ nguyên', async () => {
+    realSend();
+    const t = setup({
+      suppliers: [sup(6n, null, 'ACTIVE', '0900000002'), sup(5n, null, 'ACTIVE', '0900000003')],
+      invitations: [{ id: 7n, rfqId: 1n, supplierId: 5n, status: 'SENT', tokenHash: 'old' }],
+    });
+    t.zalo.resolveZaloUserId.mockRejectedValue(
+      new Error('SĐT 0900000002 chưa Quan tâm OA nên Zalo không cho nhắn.'),
+    );
+    const r = await t.svc.send(t.req, '1', { supplierIds: ['6', '5'], resend: true });
+    expect(r.results[0]).toMatchObject({ ok: false, status: 'FAILED' });
+    expect(r.results[0].error).toContain('chưa Quan tâm OA');
+    expect(r.results[1]).toMatchObject({ ok: false, status: 'SENT', invitationId: '7' });
+    expect(t.repo.createInvitation).not.toHaveBeenCalled();
+    expect(t.repo.updateInvitation).not.toHaveBeenCalled();
+    expect(t.invs[0].tokenHash).toBe('old');
+    expect(t.zalo.sendRfqMessage).not.toHaveBeenCalled();
+  });
+
+  it('test-send bằng SĐT: tra ra user_id, trả resolvedUserId, gửi tới id đã tra', async () => {
+    process.env.APP_BASE_URL = 'http://app.test';
+    const t = setup();
+    t.zalo.resolveZaloUserId.mockResolvedValue('RESOLVED9');
+    t.zalo.sendRfqMessage.mockResolvedValue({ ok: true, resp: { error: 0 } });
+    const r = await t.svc.testSend(t.req, '1', { zaloUserId: '0900 000 009' });
+    expect(t.zalo.resolveZaloUserId).toHaveBeenCalledWith('0900000009');
+    expect((t.zalo.sendRfqMessage.mock.calls[0] as [string])[0]).toBe('RESOLVED9');
+    expect(r).toMatchObject({ ok: true, resolvedUserId: 'RESOLVED9' });
+  });
+
+  it('test-send bằng user_id: không có resolvedUserId; tra lỗi -> ok=false, không tạo lời mời', async () => {
+    process.env.APP_BASE_URL = 'http://app.test';
+    const a = setup();
+    a.zalo.sendRfqMessage.mockResolvedValue({ ok: true });
+    expect(await a.svc.testSend(a.req, '1', { zaloUserId: '333333333333333333' })).not.toHaveProperty(
+      'resolvedUserId',
+    );
+    const b = setup();
+    b.zalo.resolveZaloUserId.mockRejectedValue(new Error('SĐT 0900000009 chưa Quan tâm OA'));
+    const r = await b.svc.testSend(b.req, '1', { zaloUserId: '0900000009' });
+    expect(r).toMatchObject({ ok: false, error: 'SĐT 0900000009 chưa Quan tâm OA' });
+    expect(b.repo.createInvitation).not.toHaveBeenCalled();
+    expect(b.zalo.sendRfqMessage).not.toHaveBeenCalled();
   });
 });
