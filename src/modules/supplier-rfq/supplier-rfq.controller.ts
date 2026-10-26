@@ -78,6 +78,19 @@ export class SupplierRfqController {
     res.status(200).send(Buffer.from(img.data));
   }
 
+  // Bản ảnh đã nén (JPEG <= ~900KB) để Zalo tải cho tin ảnh; công khai như ảnh gốc.
+  @Get(':id/zalo-image')
+  async zaloImage(@Param('id') id: string, @Res() res: Response) {
+    const data = await this.service.zaloImage(id);
+    if (!data) {
+      res.status(404).type('text/plain').send('Chưa có ảnh');
+      return;
+    }
+    res.setHeader('content-type', 'image/jpeg');
+    res.setHeader('cache-control', 'public, max-age=300');
+    res.status(200).send(data);
+  }
+
   // Body thô image/* (middleware ở main.ts), tối đa 5MB.
   @Post(':id/image')
   @HttpCode(200)

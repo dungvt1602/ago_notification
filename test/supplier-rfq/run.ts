@@ -481,6 +481,13 @@ async function main(): Promise<void> {
       (await gi.arrayBuffer()).byteLength === PNG.length,
     'GET ảnh công khai (không header actor)',
   );
+  const zi = await fetch(`${BASE}/api/supplier-rfqs/${rfqId}/zalo-image`);
+  check(
+    zi.status === 200 &&
+      zi.headers.get('content-type') === 'image/jpeg' &&
+      (await zi.arrayBuffer()).byteLength > 0,
+    'GET ảnh nén cho Zalo (JPEG, công khai)',
+  );
   const bad = await call('POST', `/api/supplier-rfqs/${rfqId}/image`, undefined, {
     raw: Buffer.from('<svg onload=alert(1)/>'),
     contentType: 'image/svg+xml',
@@ -540,7 +547,7 @@ async function main(): Promise<void> {
   const imgToB = imageCalls.filter((c) => c.userId === B.zaloUserId);
   check(
     imgToB.length === 1 &&
-      JSON.stringify(imgToB[0].body).includes('http://app.test/api/supplier-rfqs/' + rfqId + '/image'),
+      JSON.stringify(imgToB[0].body).includes('http://app.test/api/supplier-rfqs/' + rfqId + '/zalo-image'),
     'tin ảnh riêng gửi trước, URL ảnh theo APP_BASE_URL',
     imgToB.length,
   );

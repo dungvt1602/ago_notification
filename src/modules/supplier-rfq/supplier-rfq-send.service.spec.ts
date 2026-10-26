@@ -129,7 +129,7 @@ describe('SupplierRfqSendService', () => {
     const [imgUid, imgMsg] = t.zalo.sendRfqMessage.mock.calls[0] as [string, Record<string, unknown>];
     expect(imgUid).toBe('111222');
     expect(JSON.stringify(imgMsg)).toContain('"media_type":"image"');
-    expect(JSON.stringify(imgMsg)).toContain('http://app.test/api/supplier-rfqs/1/image');
+    expect(JSON.stringify(imgMsg)).toContain('http://app.test/api/supplier-rfqs/1/zalo-image');
     const [uid, msg] = t.zalo.sendRfqMessage.mock.calls[1] as [string, Record<string, unknown>];
     expect(uid).toBe('111222');
     const json = JSON.stringify(msg);

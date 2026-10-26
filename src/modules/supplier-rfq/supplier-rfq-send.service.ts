@@ -131,7 +131,7 @@ export class SupplierRfqSendService {
       note: rfq.note,
       itemCount: rfq.items.length,
       link,
-      imageUrl: rfq.image ? `${baseUrl}/api/supplier-rfqs/${rfq.id}/image` : null,
+      imageUrl: rfq.image ? `${baseUrl}/api/supplier-rfqs/${rfq.id}/zalo-image` : null,
     };
   }
 

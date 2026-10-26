@@ -14,6 +14,7 @@ import {
 import { buildCompare } from './rfq-compare';
 import { httpError, MSG } from './rfq-errors';
 import { invitationExpiry } from './rfq-token';
+import { compressForZalo } from './zalo-image';
 import { SupplierRfqRepository, type NewRfqItem, type RfqDetailRow } from './supplier-rfq.repository';
 
 const STATUSES = ['DRAFT', 'SENT', 'CLOSED'];
@@ -246,6 +247,12 @@ export class SupplierRfqService {
     if (!/^\d{1,18}$/.test(idRaw)) return null;
     const img = await this.repo.findImage(BigInt(idRaw));
     return img ? { mime: img.mime, data: img.data, updatedAt: img.updatedAt } : null;
+  }
+
+  // Ảnh đã nén cho Zalo; ảnh hỏng/không giải mã được -> ném lỗi (tin ảnh là best-effort nên không chặn gì).
+  async zaloImage(idRaw: string): Promise<Buffer | null> {
+    const img = await this.image(idRaw);
+    return img ? compressForZalo(img.data) : null;
   }
 
   // ---------- So sánh ----------
