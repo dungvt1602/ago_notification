@@ -505,3 +505,50 @@ model ZaloLinkRequest {
 
   @@map("zalo_link_requests")
 }
+
+// ============================================================
+// TRANSACTIONAL OUTBOX (giống ago_erp: identity.outbox_events / processed_events)
+// ============================================================
+
+// Sự kiện cần phát đi, ghi CÙNG transaction với dữ liệu nghiệp vụ; worker đọc rồi xử lý.
+// Trạng thái: PENDING | PROCESSING | PROCESSED | PROCESSED_NO_HANDLER | FAILED (CHECK ở SQL, xem
+// migrations-manual/2026-10-19-outbox-events.sql). aggregate_id lưu CHUỖI vì khoá nghiệp vụ ở đây là BigInt
+// (ERP dùng uuid). sequence_no đơn điệu theo thứ tự INSERT -> khoá thứ tự phụ trong từng aggregate.
+model OutboxEvent {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  correlationId String?   @map("correlation_id") @db.Uuid
+  eventType     String    @map("event_type") @db.VarChar(150)
+  eventVersion  String    @map("event_version") @db.VarChar(30)
+  aggregateType String    @map("aggregate_type") @db.VarChar(100)
+  aggregateId   String?   @map("aggregate_id") @db.VarChar(64)
+  aggregateCode String?   @map("aggregate_code") @db.VarChar(150)
+  payload       Json      @db.JsonB
+  status        String    @db.VarChar(50)
+  retryCount    Int       @default(0) @map("retry_count")
+  lastError     String?   @map("last_error") @db.Text
+  lockedAt      DateTime? @map("locked_at") @db.Timestamptz(6)
+  lockedBy      String?   @map("locked_by") @db.VarChar(100)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  processedAt   DateTime? @map("processed_at") @db.Timestamptz(6)
+  sequenceNo    BigInt    @default(autoincrement()) @map("sequence_no")
+
+  @@index([status, createdAt], map: "idx_outbox_events_pending")
+  @@index([aggregateType, aggregateId], map: "idx_outbox_events_aggregate")
+  @@index([correlationId], map: "idx_outbox_events_correlation")
+  @@map("outbox_events")
+}
+
+// Sổ ghi nhận "event này đã xử lý rồi" -> consumer idempotent (xử lý lại cùng event_id thì bỏ qua).
+model ProcessedEvent {
+  eventId       String   @id @map("event_id") @db.Uuid
+  sourceModule  String   @map("source_module") @db.VarChar(100)
+  eventType     String   @map("event_type") @db.VarChar(150)
+  eventVersion  String   @map("event_version") @db.VarChar(30)
+  correlationId String?  @map("correlation_id") @db.Uuid
+  processedAt   DateTime @default(now()) @map("processed_at") @db.Timestamptz(6)
+
+  @@index([sourceModule, eventType], map: "idx_processed_events_source")
+  @@index([processedAt], map: "idx_processed_events_processed_at")
+  @@index([correlationId], map: "idx_processed_events_correlation")
+  @@map("processed_events")
+}
