@@ -1,10 +1,8 @@
 /*
  * Dựng payload tin tư vấn Zalo (POST /v3.0/oa/message/cs) cho RFQ — MỘT chỗ duy nhất, thuần (không I/O).
  *
- * Gửi tới NCC gồm tối đa 2 tin, theo thứ tự:
- *  1) (nếu RFQ có ảnh) tin ẢNH riêng — buildRfqImageMessage. Định dạng media/image viết theo trí nhớ tài liệu
- *     Zalo, CHƯA xác minh; tin này chỉ "cố gắng", lỗi không được chặn tin báo giá.
- *  2) tin báo giá: 'buttons' = chữ + 1 nút "Nhập giá" mở link (định dạng ĐÃ CHẠY THẬT trên cùng OA ở hệ thống
+ * Gửi tới NCC MỘT tin (không gửi ảnh vào chat — ảnh RFQ chỉ nằm trong form công khai /ncc/<token>):
+ *  tin báo giá: 'buttons' = chữ + 1 nút "Nhập giá" mở link (định dạng ĐÃ CHẠY THẬT trên cùng OA ở hệ thống
  *     ago-checklist-backend: message.text + attachment.template.payload.buttons[oa.open.url]);
  *     'text' = chữ + link thô, dự phòng khi Zalo từ chối tin có nút vì lý do nghiệp vụ.
  * Nút "Nhắn thử" ở màn RFQ hiện nguyên phản hồi Zalo để chỉnh; sai khuôn thì sửa DUY NHẤT file này.
@@ -18,7 +16,6 @@ export type RfqMessageInput = {
   note?: string | null;
   itemCount: number;
   link: string;
-  imageUrl: string | null; // URL công khai của ảnh (null = RFQ chưa có ảnh)
 };
 
 export type ZaloCsMessage = Record<string, unknown>;
@@ -57,16 +54,6 @@ export function buildRfqMessage(mode: RfqMessageMode, input: RfqMessageInput): Z
       payload: {
         buttons: [{ title: BUTTON_TITLE, type: 'oa.open.url', payload: { url: input.link } }],
       },
-    },
-  };
-}
-
-// Tin ảnh riêng (best-effort, chưa xác minh định dạng).
-export function buildRfqImageMessage(imageUrl: string): ZaloCsMessage {
-  return {
-    attachment: {
-      type: 'template',
-      payload: { template_type: 'media', elements: [{ media_type: 'image', url: imageUrl }] },
     },
   };
 }

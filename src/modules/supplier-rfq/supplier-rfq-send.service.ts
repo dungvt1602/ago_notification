@@ -11,7 +11,6 @@ import { httpError, MSG, rfqBaseUrl } from './rfq-errors';
 import { generateToken, hashToken, invitationExpiry } from './rfq-token';
 import { SupplierRfqRepository } from './supplier-rfq.repository';
 import {
-  buildRfqImageMessage,
   buildRfqMessage,
   shouldFallbackToText,
   type RfqMessageInput,
@@ -28,8 +27,6 @@ export type DeliverResult = {
   zalo?: unknown;
   messageId?: string;
   buttonError?: string; // lỗi của tin có nút (khi đã rơi về chữ hoặc cả hai đều hỏng)
-  imageSent: boolean;
-  imageError?: string;
 };
 
 export type SendResult = {
@@ -86,7 +83,7 @@ export class SupplierRfqSendService {
   }
 
   /*
-   * Gửi RFQ tới 1 user_id: (1) tin ảnh riêng nếu có — lỗi chỉ ghi imageError, KHÔNG chặn; (2) tin có nút "Nhập giá";
+   * Gửi RFQ tới 1 user_id: một tin có nút "Nhập giá" (KHÔNG gửi ảnh vào chat — ảnh chỉ nằm trong form /ncc/<token>);
    * Zalo từ chối bằng lỗi nghiệp vụ (không thuộc nhóm người nhận/hạn mức/token) thì thử lại ĐÚNG MỘT lần dạng chữ.
    * Không bao giờ ném lỗi. pace=true (gửi hàng loạt) thì giãn nhịp giữa các cuộc gọi; nhắn thử không chờ.
    */
@@ -95,23 +92,15 @@ export class SupplierRfqSendService {
       if (pace) await this.gap();
       return this.zalo.sendRfqMessage(zaloUserId, msg);
     };
-    let imageSent = false;
-    let imageError: string | undefined;
-    if (input.imageUrl) {
-      const img = await call(buildRfqImageMessage(input.imageUrl));
-      imageSent = img.ok;
-      if (!img.ok) imageError = img.error ?? 'Gửi ảnh lỗi';
-    }
-    const img = { imageSent, ...(imageError ? { imageError } : {}) };
     const btn = await call(buildRfqMessage('buttons', input));
-    if (btn.ok) return { ok: true, mode: 'buttons', zalo: btn.resp, messageId: btn.messageId, ...img };
+    if (btn.ok) return { ok: true, mode: 'buttons', zalo: btn.resp, messageId: btn.messageId };
     const buttonError = btn.error ?? 'lỗi';
     if (!shouldFallbackToText(btn.code)) {
-      return { ok: false, mode: 'buttons', zalo: btn.resp, error: buttonError, buttonError, ...img };
+      return { ok: false, mode: 'buttons', zalo: btn.resp, error: buttonError, buttonError };
     }
     const text = await call(buildRfqMessage('text', input));
     if (text.ok) {
-      return { ok: true, mode: 'text', zalo: text.resp, messageId: text.messageId, buttonError, ...img };
+      return { ok: true, mode: 'text', zalo: text.resp, messageId: text.messageId, buttonError };
     }
     return {
       ok: false,
@@ -119,11 +108,10 @@ export class SupplierRfqSendService {
       zalo: text.resp ?? btn.resp,
       error: text.error ?? 'lỗi',
       buttonError,
-      ...img,
     };
   }
 
-  private messageInput(rfq: Rfq, link: string, baseUrl: string): RfqMessageInput {
+  private messageInput(rfq: Rfq, link: string): RfqMessageInput {
     return {
       code: rfq.code,
       title: rfq.title,
@@ -131,7 +119,6 @@ export class SupplierRfqSendService {
       note: rfq.note,
       itemCount: rfq.items.length,
       link,
-      imageUrl: rfq.image ? `${baseUrl}/api/supplier-rfqs/${rfq.id}/zalo-image` : null,
     };
   }
 
@@ -300,7 +287,7 @@ export class SupplierRfqSendService {
         // Gửi giả: không gọi mạng, chỉ đánh dấu DRYRUN- để tra log biết tin không có thật.
         res = { ok: true, messageId: dryRunMessageId() };
       } else {
-        res = await this.deliver(zaloId, this.messageInput(rfq, link, baseUrl), true);
+        res = await this.deliver(zaloId, this.messageInput(rfq, link), true);
       }
     } catch (err) {
       res = { ok: false, error: friendlyError(err) };
@@ -353,7 +340,6 @@ export class SupplierRfqSendService {
         ok: false,
         mode: 'buttons' as RfqMessageMode,
         link: '',
-        imageSent: false,
         error: friendlyError(err),
       };
     }
@@ -369,7 +355,7 @@ export class SupplierRfqSendService {
       expiresAt: invitationExpiry(rfq.deadline, now),
       channel: 'ZALO',
     });
-    const res = await this.deliver(zaloId, this.messageInput(rfq, link, baseUrl));
+    const res = await this.deliver(zaloId, this.messageInput(rfq, link));
     await this.repo.updateInvitation(
       inv.id,
       res.ok
@@ -390,8 +376,6 @@ export class SupplierRfqSendService {
       ...(res.error ? { error: res.error } : {}),
       ...(res.zalo !== undefined ? { zalo: res.zalo } : {}),
       ...(res.buttonError ? { buttonError: res.buttonError } : {}),
-      imageSent: res.imageSent,
-      ...(res.imageError ? { imageError: res.imageError } : {}),
     };
   }
 }

@@ -1,5 +1,4 @@
 import {
-  buildRfqImageMessage,
   buildRfqMessage,
   formatDeadlineVN,
   shouldFallbackToText,
@@ -13,7 +12,6 @@ const base: RfqMessageInput = {
   note: null,
   itemCount: 3,
   link: 'http://app.test/ncc/TOKEN',
-  imageUrl: 'http://app.test/api/supplier-rfqs/1/image',
 };
 
 describe('buildRfqMessage', () => {
@@ -57,20 +55,6 @@ describe('buildRfqMessage', () => {
   it('text: cùng nội dung + dòng link thô', () => {
     expect(buildRfqMessage('text', base)).toEqual({
       text: 'Yêu cầu báo giá RFQ-2026-0001\nXoài cát Hoà Lộc\nHạn báo giá: 17:30 10/11/2026\nSố mặt hàng: 3\n\nBấm vào link để nhập giá: http://app.test/ncc/TOKEN',
-    });
-  });
-});
-
-describe('buildRfqImageMessage', () => {
-  it('JSON chính xác của tin ảnh (media/image)', () => {
-    expect(buildRfqImageMessage('http://app.test/api/supplier-rfqs/1/image')).toEqual({
-      attachment: {
-        type: 'template',
-        payload: {
-          template_type: 'media',
-          elements: [{ media_type: 'image', url: 'http://app.test/api/supplier-rfqs/1/image' }],
-        },
-      },
     });
   });
 });

@@ -94,9 +94,8 @@ const ZALO_MESSAGES: Record<number, string> = {
   [-1]: 'Invalid button url (fake)',
   [-230]: 'User has not interacted with the OA in the past 7 days (fake)',
 };
-// Tin ảnh riêng không tính vào zaloCalls (để các phép đếm tin báo giá giữ nguyên) mà ghi ở đây.
+// Hệ thống KHÔNG được gửi tin ảnh vào chat Zalo: nếu có tin media nào tới Zalo giả thì ghi ở đây để kiểm tra rỗng.
 const imageCalls: ZaloCall[] = [];
-const failImageUsers = new Set<string>();
 const callOrder: Array<{ kind: string; userId: string }> = [];
 // Tra SĐT -> user_id (GET /v3.0/oa/user/detail): chỉ SĐT này (đã chuẩn hoá 84...) được Zalo giả nhận ra.
 const KNOWN_PHONE = '84900000001';
@@ -140,8 +139,6 @@ function startFakeZalo(): Promise<void> {
           kind: kind as 'buttons' | 'text',
           body,
         });
-        if (isImage && failImageUsers.has(userId))
-          return reply({ error: -1, message: 'Invalid media (fake)' });
         if (userId === '000') return reply({ error: -232, message: 'User has not interacted (fake)' });
         if (failUsers.has(userId)) return reply({ error: -1, message: 'Forced failure (fake)' });
         if (kind === 'buttons' && buttonsFailCode !== null) {
@@ -481,12 +478,9 @@ async function main(): Promise<void> {
       (await gi.arrayBuffer()).byteLength === PNG.length,
     'GET ảnh công khai (không header actor)',
   );
-  const zi = await fetch(`${BASE}/api/supplier-rfqs/${rfqId}/zalo-image`);
   check(
-    zi.status === 200 &&
-      zi.headers.get('content-type') === 'image/jpeg' &&
-      (await zi.arrayBuffer()).byteLength > 0,
-    'GET ảnh nén cho Zalo (JPEG, công khai)',
+    (await fetch(`${BASE}/api/supplier-rfqs/${rfqId}/zalo-image`)).status === 404,
+    'route zalo-image đã gỡ -> 404',
   );
   const bad = await call('POST', `/api/supplier-rfqs/${rfqId}/image`, undefined, {
     raw: Buffer.from('<svg onload=alert(1)/>'),
@@ -544,20 +538,14 @@ async function main(): Promise<void> {
     'tin có nút Nhập giá (không link thô trong chữ)',
     listBody,
   );
-  const imgToB = imageCalls.filter((c) => c.userId === B.zaloUserId);
-  check(
-    imgToB.length === 1 &&
-      JSON.stringify(imgToB[0].body).includes('http://app.test/api/supplier-rfqs/' + rfqId + '/zalo-image'),
-    'tin ảnh riêng gửi trước, URL ảnh theo APP_BASE_URL',
-    imgToB.length,
-  );
+  check(imageCalls.length === 0, 'RFQ có ảnh nhưng KHÔNG gửi tin ảnh vào chat Zalo', imageCalls.length);
   const orderA = callOrder
     .filter((c) => c.userId === A.zaloUserId)
     .map((c) => c.kind)
     .join();
   check(
-    orderA === 'image,buttons,text',
-    'Alpha: ảnh -> nút (bị từ chối -1) -> rơi về text đúng 1 lần',
+    orderA === 'buttons,text',
+    'Alpha: nút (bị từ chối -1) -> rơi về text đúng 1 lần',
     orderA,
   );
   const tokenB = /http:\/\/app\.test\/ncc\/([A-Za-z0-9_-]{43})/.exec(listBody)?.[1] as string;
@@ -654,9 +642,9 @@ async function main(): Promise<void> {
     ts.status === 200 &&
       ts.json.ok === true &&
       ts.json.mode === 'buttons' &&
-      ts.json.imageSent === true &&
+      !('imageSent' in ts.json) &&
       ts.json.zalo?.error === 0,
-    'test-send ok (buttons + ảnh) kèm phản hồi Zalo',
+    'test-send ok (buttons, không có imageSent) kèm phản hồi Zalo',
     ts.json,
   );
   const testToken = tokenOf(ts.json.link as string);
@@ -1040,22 +1028,20 @@ async function main(): Promise<void> {
     'test-send bằng user_id: không có resolvedUserId',
   );
 
-  step('Tin ảnh + nút: ảnh lỗi, nút lỗi, -230');
-  failImageUsers.add('333');
+  step('Tin có nút: không gửi ảnh, nút lỗi, -230');
   const zi0 = zaloCalls.length;
   const tImg = await call('POST', `/api/supplier-rfqs/${rfqId}/test-send`, { zaloUserId: '333' });
-  failImageUsers.delete('333');
   check(
     tImg.json.ok === true &&
       tImg.json.mode === 'buttons' &&
-      tImg.json.imageSent === false &&
-      typeof tImg.json.imageError === 'string',
-    'ảnh bị từ chối: vẫn gửi tin báo giá, ghi imageError',
+      !('imageSent' in tImg.json) &&
+      !('imageError' in tImg.json),
+    'test-send: không có imageSent/imageError',
     tImg.json,
   );
   check(
-    zaloCalls.length === zi0 + 1 && zaloCalls.at(-1)?.kind === 'buttons',
-    'tin có nút vẫn tới nơi dù ảnh lỗi',
+    zaloCalls.length === zi0 + 1 && zaloCalls.at(-1)?.kind === 'buttons' && imageCalls.length === 0,
+    'chỉ một tin có nút, không có tin ảnh',
   );
 
   buttonsFailCode = -1;

@@ -119,20 +119,17 @@ describe('SupplierRfqSendService', () => {
     expect(t.repo.markSentIfDraft).not.toHaveBeenCalled();
   });
 
-  it('gửi thật: ảnh rồi tin có nút tới đúng user_id, link theo APP_BASE_URL, chỉ lưu hash token', async () => {
+  it('gửi thật: MỘT tin có nút tới đúng user_id (RFQ có ảnh cũng không gửi tin ảnh), link theo APP_BASE_URL, chỉ lưu hash token', async () => {
     realSend();
     const t = setup({ suppliers: [sup(5n, '111222')], rfqRow: rfqImg });
     t.zalo.sendRfqMessage.mockResolvedValue({ ok: true, resp: { error: 0 }, messageId: 'M1' });
     const r = await t.svc.send(t.req, '1', { supplierIds: [5] });
     expect(r.results[0]).toMatchObject({ ok: true, status: 'SENT' });
-    expect(t.zalo.sendRfqMessage).toHaveBeenCalledTimes(2);
-    const [imgUid, imgMsg] = t.zalo.sendRfqMessage.mock.calls[0] as [string, Record<string, unknown>];
-    expect(imgUid).toBe('111222');
-    expect(JSON.stringify(imgMsg)).toContain('"media_type":"image"');
-    expect(JSON.stringify(imgMsg)).toContain('http://app.test/api/supplier-rfqs/1/zalo-image');
-    const [uid, msg] = t.zalo.sendRfqMessage.mock.calls[1] as [string, Record<string, unknown>];
+    expect(t.zalo.sendRfqMessage).toHaveBeenCalledTimes(1);
+    const [uid, msg] = t.zalo.sendRfqMessage.mock.calls[0] as [string, Record<string, unknown>];
     expect(uid).toBe('111222');
     const json = JSON.stringify(msg);
+    expect(json).not.toContain('media_type');
     expect(json).toContain('"buttons"');
     expect(json).toContain('http://app.test/ncc/');
     const token = /\/ncc\/([A-Za-z0-9_-]{43})/.exec(json)?.[1] as string;
@@ -237,9 +234,9 @@ describe('SupplierRfqSendService', () => {
     expect(r).toMatchObject({
       ok: true,
       mode: 'buttons',
-      imageSent: false,
       zalo: { error: 0, message: 'Success' },
     });
+    expect(r).not.toHaveProperty('imageSent');
     expect(r.link).toMatch(/^http:\/\/app\.test\/ncc\/[A-Za-z0-9_-]{43}$/);
     expect(t.repo.createInvitation).toHaveBeenCalledWith(
       expect.objectContaining({ isTest: true, supplierId: null }),
@@ -291,38 +288,14 @@ describe('SupplierRfqSendService', () => {
     expect(r).toMatchObject({ ok: false, mode: 'buttons', error: msg, zalo: { error: -230 } });
   });
 
-  it('ảnh lỗi KHÔNG chặn tin báo giá: imageError được ghi, tin có nút vẫn gửi', async () => {
+  it('test-send với RFQ có ảnh: chỉ một tin có nút, không có tin ảnh', async () => {
     process.env.APP_BASE_URL = 'http://app.test';
     const t = setup({ rfqRow: rfqImg });
-    t.zalo.sendRfqMessage.mockImplementation((_u: string, m: Record<string, unknown>) =>
-      Promise.resolve(
-        JSON.stringify(m).includes('media_type')
-          ? { ok: false, code: -1, error: 'media sai' }
-          : { ok: true, resp: { error: 0 } },
-      ),
-    );
+    t.zalo.sendRfqMessage.mockResolvedValue({ ok: true, resp: { error: 0 } });
     const r = await t.svc.testSend(t.req, '1', { zaloUserId: '999999' });
-    expect(t.zalo.sendRfqMessage).toHaveBeenCalledTimes(2);
-    expect(r).toMatchObject({ ok: true, mode: 'buttons', imageSent: false, imageError: 'media sai' });
-    const ok = setup({ rfqRow: rfqImg });
-    ok.zalo.sendRfqMessage.mockResolvedValue({ ok: true });
-    expect(await ok.svc.testSend(ok.req, '1', { zaloUserId: '999999' })).toMatchObject({ imageSent: true });
-  });
-
-  it('gửi hàng loạt: ảnh lỗi vẫn gửi được; dry-run không gửi ảnh', async () => {
-    realSend();
-    const t = setup({ suppliers: [sup(5n, '111')], rfqRow: rfqImg });
-    t.zalo.sendRfqMessage.mockImplementation((_u: string, m: Record<string, unknown>) =>
-      Promise.resolve(
-        JSON.stringify(m).includes('media_type') ? { ok: false, code: -1, error: 'x' } : { ok: true },
-      ),
-    );
-    const r = await t.svc.send(t.req, '1', { supplierIds: ['5'] });
-    expect(r.results[0]).toMatchObject({ ok: true, status: 'SENT' });
-    process.env.SEND_DRY_RUN = 'true';
-    const d = setup({ suppliers: [sup(5n, '111')], rfqRow: rfqImg });
-    await d.svc.send(d.req, '1', { supplierIds: ['5'] });
-    expect(d.zalo.sendRfqMessage).not.toHaveBeenCalled();
+    expect(t.zalo.sendRfqMessage).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(t.zalo.sendRfqMessage.mock.calls[0])).not.toContain('media_type');
+    expect(r).toMatchObject({ ok: true, mode: 'buttons' });
   });
 
   it('giãn nhịp: lượt gửi hàng loạt cách nhau >= paceMs; nhắn thử không chờ', async () => {
@@ -333,10 +306,10 @@ describe('SupplierRfqSendService', () => {
         JSON.stringify(m).includes('buttons') ? { ok: false, code: -1, error: 'x' } : { ok: true },
       ),
     );
-    const input = { code: 'C', title: 'T', deadline: null, itemCount: 1, link: 'l', imageUrl: 'u' };
+    const input = { code: 'C', title: 'T', deadline: null, itemCount: 1, link: 'l' };
     const t0 = Date.now();
-    await t.svc.deliver('1', input, true); // ảnh + nút + text = 3 cuộc gọi
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(150);
+    await t.svc.deliver('1', input, true); // nút + text = 2 cuộc gọi
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(70);
     const t1 = Date.now();
     await t.svc.deliver('1', input, false);
     expect(Date.now() - t1).toBeLessThan(60);
