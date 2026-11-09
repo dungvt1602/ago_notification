@@ -19,6 +19,7 @@ export type ListCustomersOptions = {
   search?: string | null; // tìm theo tên / công ty / SĐT / email / quốc gia
   phoneType?: string | null; // lọc theo loại số (MOBILE | FIXED_LINE | AMBIGUOUS | UNKNOWN)
   hasWhatsapp?: boolean | null; // true = chỉ lấy khách CÓ số WhatsApp (whatsappPhone not null)
+  waStatus?: string | null; // lọc theo trạng thái WhatsApp suy từ kết quả gửi: NO_WHATSAPP | OK (chưa bị đánh dấu)
   sort?: string | null; // cột sắp xếp (chỉ nhận các cột trong SORTABLE)
   dir?: string | null; // asc | desc
 };
@@ -46,8 +47,8 @@ function buildCustomerOrder(opts: ListCustomersOptions): Prisma.CustomerOrderByW
 }
 
 // Dựng điều kiện WHERE dùng chung cho list thường & list phân trang.
-function buildCustomerWhere(opts: ListCustomersOptions): Prisma.CustomerWhereInput {
-  const { excludeTemplate, market, search, phoneType, hasWhatsapp } = opts;
+export function buildCustomerWhere(opts: ListCustomersOptions): Prisma.CustomerWhereInput {
+  const { excludeTemplate, market, search, phoneType, hasWhatsapp, waStatus } = opts;
   const and: Prisma.CustomerWhereInput[] = [];
 
   if (excludeTemplate) {
@@ -60,6 +61,8 @@ function buildCustomerWhere(opts: ListCustomersOptions): Prisma.CustomerWhereInp
   if (phoneType && phoneType.trim()) {
     and.push({ phoneType: { equals: phoneType.trim().toUpperCase() } });
   }
+  if (waStatus === 'NO_WHATSAPP') and.push({ waStatus: 'NO_WHATSAPP' });
+  else if (waStatus === 'OK') and.push({ OR: [{ waStatus: null }, { NOT: { waStatus: 'NO_WHATSAPP' } }] });
   // Chỉ khách CÓ số WhatsApp. Lưu ý: cột để trống VÀ chuỗi rỗng đều tính là "không có" — dữ liệu
   // nhập từ Excel hay lọt ô rỗng, lọc thiếu vế này thì khách không có số vẫn lọt vào danh sách gửi.
   if (hasWhatsapp) {
