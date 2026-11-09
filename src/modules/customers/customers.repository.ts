@@ -30,6 +30,42 @@ export class CustomersRepository {
     return prisma.customer.findMany({ where, select: { id: true }, orderBy: { name: 'asc' } });
   }
 
+  // Khách có số KHÔNG có WhatsApp: đã đánh dấu NO_WHATSAPP hoặc có lỗi 131026 trong log gửi WhatsApp,
+  // TRỪ khách từng được giao/đọc tin thành công hoặc từng nhắn lại (số đó dùng được).
+  findNoWhatsappCustomers() {
+    return prisma.customer.findMany({
+      where: {
+        AND: [
+          {
+            OR: [
+              { waStatus: 'NO_WHATSAPP' },
+              { sendJobs: { some: { channel: 'WHATSAPP', error: { contains: '131026' } } } },
+            ],
+          },
+          { NOT: { sendJobs: { some: { channel: 'WHATSAPP', status: { in: ['DELIVERED', 'READ'] } } } } },
+          { inboundMessages: { none: {} } },
+        ],
+      },
+      select: { id: true, name: true },
+    });
+  }
+
+  // Huỷ tin chưa gửi, xoá audit (RESTRICT) rồi xoá khách — CHUNG một transaction.
+  purgeCustomers(ids: bigint[]) {
+    return prisma.$transaction([
+      prisma.sendJob.updateMany({
+        where: { customerId: { in: ids }, status: { in: ['QUEUED', 'HOLD'] } },
+        data: {
+          status: 'FAILED',
+          retryCount: 99,
+          error: 'Số không có WhatsApp — khách đã bị xoá, tin chưa gửi đã bị huỷ.',
+        },
+      }),
+      prisma.auditLog.deleteMany({ where: { customerId: { in: ids } } }),
+      prisma.customer.deleteMany({ where: { id: { in: ids } } }),
+    ]);
+  }
+
   findTemplateLinks(templateId: bigint, customerIds: bigint[]) {
     return prisma.templateCustomer.findMany({
       where: { templateId, customerId: { in: customerIds } },

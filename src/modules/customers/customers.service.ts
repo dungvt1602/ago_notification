@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import type { Request } from 'express';
 import { Prisma } from '@prisma/client';
 import { webReq } from '@common/http/web-request';
@@ -10,6 +10,7 @@ import {
 } from '@core/validation/customer.schema';
 import { detectPhoneType } from '@core/lib/phoneType';
 import { AuditService } from '@common/audit/audit.service';
+import { ActivityService } from '../activity/activity.service';
 import { labelOf, diffSummary } from '@common/audit/audit.helpers';
 import { CustomersRepository, type CustomerWithLinks } from './customers.repository';
 
@@ -107,11 +108,49 @@ function cleanImportRow(raw: unknown): unknown {
 }
 
 @Injectable()
-export class CustomersService {
+export class CustomersService implements OnApplicationBootstrap {
+  private readonly logger = new Logger(CustomersService.name);
+
   constructor(
     private readonly repo: CustomersRepository,
     private readonly auditService: AuditService,
+    private readonly activity: ActivityService,
   ) {}
+
+  /*
+   * Dọn MỘT LẦN các khách số không có WhatsApp đã nằm sẵn trong dữ liệu (đã báo 131026 / đã đánh dấu).
+   * XOÁ KHÔNG HOÀN TÁC nên chỉ chạy khi bật công tắc PURGE_NO_WHATSAPP_ON_BOOT=true (mặc định tắt):
+   * bật -> deploy -> xem log "Đã dọn" -> TẮT lại để các lần deploy sau không xoá nữa.
+   * Chạy nền, lỗi chỉ ghi log, không làm hỏng việc khởi động.
+   */
+  onApplicationBootstrap(): void {
+    if (process.env.PURGE_NO_WHATSAPP_ON_BOOT !== 'true') return;
+    void this.purgeNoWhatsappCustomers().catch((e: unknown) =>
+      this.logger.error(`Dọn khách không có WhatsApp lỗi: ${e instanceof Error ? e.message : String(e)}`),
+    );
+  }
+
+  async purgeNoWhatsappCustomers(): Promise<{ deleted: number; sample: string[] }> {
+    const targets = await this.repo.findNoWhatsappCustomers();
+    let deleted = 0;
+    for (let i = 0; i < targets.length; i += 500) {
+      const [, , r] = await this.repo.purgeCustomers(targets.slice(i, i + 500).map((t) => t.id));
+      deleted += r.count;
+    }
+    const sample = targets.slice(0, 5).map((t) => t.name);
+    this.logger.warn(`Đã dọn ${deleted} khách số không có WhatsApp (vd: ${sample.join(', ')})`);
+    if (deleted > 0) {
+      await this.activity
+        .logActivity({
+          action: 'KHACH_HANG_XOA_TU_DONG',
+          target: `${deleted} khách hàng`,
+          result: 'SUCCESS',
+          note: `Dọn khi khởi động: số không có WhatsApp (131026). vd: ${sample.join(', ')}`,
+        })
+        .catch(() => {});
+    }
+    return { deleted, sample };
+  }
 
   // ---- Logic gốc (tên/chữ ký giữ nguyên, module khác gọi trực tiếp) ----
 
