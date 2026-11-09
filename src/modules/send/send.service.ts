@@ -494,10 +494,20 @@ export class SendService {
         // Lỗi VĨNH VIỄN của Meta (retry cũng vô ích) -> FAILED luôn, khỏi quay vòng hàng đợi.
         const permanent =
           /131049|131026|131047|131000|130472|132\d{3}|\(#100\)|Parameter name is missing/.test(msg);
-        // 131026 = Message Undeliverable — tín hiệu YẾU, chỉ đánh dấu waStatus để cảnh báo trên UI,
-        // KHÔNG tự loại khách khỏi danh sách gửi.
+        // 131026 = Message Undeliverable (số không có WhatsApp) -> xoá khách luôn (yêu cầu chủ hệ thống).
+        // Khách từng nhận/nhắn lại thì repo chỉ đánh dấu waStatus, không xoá. Lỗi ở bước này không được làm hỏng luồng gửi.
         if (/131026/.test(msg) && job.customerId != null) {
-          await this.repo.markCustomerNoWhatsapp(job.customerId).catch(() => {}); // không để lỗi đánh dấu làm hỏng luồng gửi
+          const r = await this.repo.deleteCustomerWithoutWhatsapp(job.customerId).catch(() => null);
+          if (r?.deleted) {
+            await this.activity
+              .logActivity({
+                action: 'KHACH_HANG_XOA_TU_DONG',
+                target: r.name ?? String(job.customerId),
+                result: 'SUCCESS',
+                note: `Tự xoá vì số ${r.phone ?? job.toPhone ?? ''} không có WhatsApp (131026), lệnh ${batch.code}`,
+              })
+              .catch(() => {});
+          }
         }
         await this.repo.updateJobAfterError(job.id, {
           status: permanent || rc >= MAX_RETRY ? 'FAILED' : 'QUEUED',

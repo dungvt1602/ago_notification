@@ -20,6 +20,7 @@ export const ACTION_LABELS: Record<string, { label: string; group: ActionGroup }
   KHACH_HANG_TAO: { label: 'Thêm khách hàng', group: 'customer' },
   KHACH_HANG_SUA: { label: 'Sửa khách hàng', group: 'customer' },
   KHACH_HANG_XOA: { label: 'Xóa khách hàng', group: 'customer' },
+  KHACH_HANG_XOA_TU_DONG: { label: 'Tự xóa khách (số không có WhatsApp)', group: 'customer' },
   KHACH_HANG_NHAP_FILE: { label: 'Nhập khách hàng từ file', group: 'customer' },
 
   TEMPLATE_TAO: { label: 'Tạo template', group: 'template' },

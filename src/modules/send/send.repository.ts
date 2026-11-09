@@ -228,9 +228,42 @@ export class SendRepository {
     });
   }
 
-  // Có throw (không .catch) — chỉ gọi ngoài; việc .catch(() => {}) do service giữ như bản gốc.
-  markCustomerNoWhatsapp(customerId: bigint) {
-    return prisma.customer.update({ where: { id: customerId }, data: { waStatus: 'NO_WHATSAPP' } });
+  /*
+   * Số không có WhatsApp (Meta 131026) -> XOÁ khách luôn, theo yêu cầu chủ hệ thống.
+   * Chốt chặn: khách đã từng được giao/đọc tin WhatsApp thành công hoặc đã nhắn lại thì số đó dùng được
+   * (131026 chỉ là tín hiệu yếu) -> KHÔNG xoá, chỉ đánh dấu NO_WHATSAPP như trước.
+   * Xoá kèm huỷ tin chưa gửi (QUEUED/HOLD) của khách đó trong CÙNG transaction (send_jobs.customer_id là SetNull
+   * nên job vẫn sẽ bị worker nhặt nếu không huỷ). Dòng log gửi giữ nguyên (đã lưu sẵn tên + SĐT).
+   */
+  async deleteCustomerWithoutWhatsapp(
+    customerId: bigint,
+  ): Promise<{ deleted: boolean; name?: string; phone?: string | null }> {
+    return prisma.$transaction(async (tx) => {
+      const c = await tx.customer.findUnique({
+        where: { id: customerId },
+        select: { name: true, whatsappPhone: true, phone: true },
+      });
+      if (!c) return { deleted: false };
+      const worked =
+        (await tx.sendJob.count({
+          where: { customerId, channel: 'WHATSAPP', status: { in: ['DELIVERED', 'READ'] } },
+        })) + (await tx.inboundMessage.count({ where: { customerId } }));
+      if (worked > 0) {
+        await tx.customer.update({ where: { id: customerId }, data: { waStatus: 'NO_WHATSAPP' } });
+        return { deleted: false };
+      }
+      await tx.sendJob.updateMany({
+        where: { customerId, status: { in: ['QUEUED', 'HOLD'] } },
+        data: {
+          status: 'FAILED',
+          retryCount: 99,
+          error: 'Số không có WhatsApp — khách đã bị xoá, tin chưa gửi đã bị huỷ.',
+        },
+      });
+      await tx.auditLog.deleteMany({ where: { customerId } }); // audit_logs.customer_id là RESTRICT: không xoá thì xoá khách lỗi
+      await tx.customer.delete({ where: { id: customerId } });
+      return { deleted: true, name: c.name, phone: c.whatsappPhone ?? c.phone };
+    });
   }
 
   updateJobAfterError(id: bigint, data: { status: string; error: string; retryCount: number }) {

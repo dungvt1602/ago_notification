@@ -58,3 +58,7 @@ Quy ước chung như trên: lỗi `{ "error": string }`, id là **chuỗi**, ti
 - Lỗi thân thiện (`results[].error` của send và `error` của test-send; JSON thô vẫn ở `zalo`): -230 `Người nhận không tương tác với OA quá 7 ngày — nhờ họ nhắn OA một tin rồi gửi lại.`; -320 `App Zalo chưa nối Zalo Cloud Account nên không gửi được tin ngoài khung 48 giờ (tin tính phí).`; -32 `OA chạm hạn mức gọi API, thử lại sau 1 phút.`; -232/-201 `… (error -232) — user_id không tồn tại hoặc người này chưa Quan tâm / chưa nhắn OA.`
 - `send` giãn nhịp ≥700ms giữa hai cuộc gọi Zalo trong một lượt (lượt nhiều NCC chạy lâu hơn); `results` không đổi cấu trúc.
 - `GET /api/supplier-rfqs/:id/image` (CÔNG KHAI, ảnh gốc; 404 text "Chưa có ảnh") chỉ phục vụ trang NCC `/ncc/<token>`; không còn route `zalo-image` và không nén ảnh.
+
+### Tự xoá khách khi số không có WhatsApp
+- Khi worker gửi WhatsApp nhận lỗi Meta `131026` (Message undeliverable), BE XOÁ khách đó luôn (kèm huỷ tin QUEUED/HOLD của khách) và ghi nhật ký `KHACH_HANG_XOA_TU_DONG`. Ngoại lệ: khách từng có tin DELIVERED/READ hoặc từng nhắn lại thì chỉ đánh dấu `waStatus = NO_WHATSAPP`, không xoá. Dòng Log gửi giữ nguyên (đã lưu sẵn tên + SĐT).
+- Bộ lọc `GET /api/customers/search?waStatus=NO_WHATSAPP|OK` dùng để xem/xoá tay các số đã được đánh dấu từ trước.
