@@ -16,7 +16,7 @@ import { CustomersRepository, type CustomerWithLinks } from './customers.reposit
 
 export type ListCustomersOptions = {
   excludeTemplate?: string | null; // trả ứng viên CHƯA thuộc template này
-  market?: string | null; // lọc theo quốc gia (thị trường)
+  market?: string | null; // lọc theo quốc gia (thị trường); nhiều cách ghi ngăn bằng '|'
   search?: string | null; // tìm theo tên / công ty / SĐT / email / quốc gia
   phoneType?: string | null; // lọc theo loại số (MOBILE | FIXED_LINE | AMBIGUOUS | UNKNOWN)
   hasWhatsapp?: boolean | null; // true = chỉ lấy khách CÓ số WhatsApp (whatsappPhone not null)
@@ -56,8 +56,16 @@ export function buildCustomerWhere(opts: ListCustomersOptions): Prisma.CustomerW
     // N-N: ứng viên = khách CHƯA có link tới template này.
     and.push({ NOT: { templateLinks: { some: { templateId: BigInt(excludeTemplate) } } } });
   }
-  if (market && market.trim()) {
-    and.push({ market: { equals: market.trim(), mode: 'insensitive' } });
+  // `market` có thể là NHIỀU cách ghi của cùng một nước, ngăn bằng '|' (vd "IN|India|INDIA"): dữ liệu nhập tay/Excel
+  // lẫn mã và tên nước, FE gộp thành một mục lọc nên BE phải khớp tất cả.
+  const markets = (market ?? '')
+    .split('|')
+    .map((m) => m.trim())
+    .filter(Boolean);
+  if (markets.length === 1) {
+    and.push({ market: { equals: markets[0], mode: 'insensitive' } });
+  } else if (markets.length > 1) {
+    and.push({ OR: markets.map((m) => ({ market: { equals: m, mode: 'insensitive' as const } })) });
   }
   if (phoneType && phoneType.trim()) {
     and.push({ phoneType: { equals: phoneType.trim().toUpperCase() } });

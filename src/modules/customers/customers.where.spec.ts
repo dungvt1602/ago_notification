@@ -16,3 +16,30 @@ describe('buildCustomerWhere — lọc waStatus', () => {
     expect(JSON.stringify(buildCustomerWhere({ waStatus: 'abc' }))).not.toContain('waStatus');
   });
 });
+
+describe('buildCustomerWhere — lọc market', () => {
+  it('một giá trị: khớp không phân biệt hoa thường', () => {
+    expect(buildCustomerWhere({ market: 'India' })).toEqual({
+      AND: [{ market: { equals: 'India', mode: 'insensitive' } }],
+    });
+  });
+
+  it('nhiều cách ghi của cùng một nước (IN|India|INDIA): khớp tất cả', () => {
+    expect(buildCustomerWhere({ market: 'IN|India|INDIA' })).toEqual({
+      AND: [
+        {
+          OR: [
+            { market: { equals: 'IN', mode: 'insensitive' } },
+            { market: { equals: 'India', mode: 'insensitive' } },
+            { market: { equals: 'INDIA', mode: 'insensitive' } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('chuỗi rỗng / chỉ dấu ngăn: không thêm điều kiện', () => {
+    expect(buildCustomerWhere({ market: ' | ' })).toEqual({});
+    expect(buildCustomerWhere({ market: '' })).toEqual({});
+  });
+});
